@@ -10,7 +10,7 @@ it('너비·품질·픽셀 제한과 잘못된 설정을 거부한다', () => {
   for (const width of [0, -1, NaN, Infinity, 1.5, 8193]) {
     expect(validOutput({ ...DEFAULT_OUTPUT, width })).toBe(false)
   }
-  for (const quality of [0, 101, 1.5, NaN]) expect(validOutput({ ...DEFAULT_OUTPUT, quality })).toBe(false)
+  for (const quality of [0, 1, 65, 90, 101, 1.5, NaN]) expect(validOutput({ ...DEFAULT_OUTPUT, quality })).toBe(false)
   expect(validOutput({ ...DEFAULT_OUTPUT, extra: true })).toBe(false)
   expect(validOutput({ ...DEFAULT_OUTPUT, preventUpscale: 'true' })).toBe(false)
   expect(validOutput({ ...DEFAULT_OUTPUT, format: 'webp' })).toBe(false)

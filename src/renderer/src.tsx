@@ -294,7 +294,7 @@ function App() {
   })
   let outputError = '', outputLabel = ''
   try {
-    if (!validOutput(output)) throw new Error('출력 너비는 1~8192 정수, JPG 품질은 1~100 정수로 입력하세요.')
+    if (!validOutput(output)) throw new Error('출력 너비는 1~8192 정수로 입력하세요. JPG 품질은 100입니다.')
     if (photo) { const size = outputSize(photo.width, photo.height, output); outputLabel = `${size.width} × ${size.height} px` }
   } catch (value) { outputError = value instanceof Error ? value.message : '출력 설정을 확인하세요.' }
   return <main onKeyDown={handleEditorKey}>
@@ -331,7 +331,7 @@ function App() {
       <label><input type="checkbox" checked={output.width === null} onChange={e => setOutput({ ...output, width: e.target.checked ? null : photo?.width ?? 1200 })} />원본 크기</label>
       <label>출력 너비<input aria-label="출력 너비" type="number" min="1" max="8192" step="1" disabled={output.width === null} value={output.width === null || !Number.isFinite(output.width) ? '' : output.width} onChange={e => setOutput({ ...output, width: e.target.valueAsNumber })} /></label>
       <label><input type="checkbox" checked={output.preventUpscale} onChange={e => setOutput({ ...output, preventUpscale: e.target.checked })} />확대 방지</label>
-      <label>JPG 품질<input aria-label="JPG 품질" type="number" min="1" max="100" step="1" disabled={output.format === 'png'} value={Number.isFinite(output.quality) ? output.quality : ''} onChange={e => setOutput({ ...output, quality: e.target.valueAsNumber })} /></label>
+      <label>JPG 품질<input aria-label="JPG 품질" type="number" min="100" max="100" step="1" disabled value={Number.isFinite(output.quality) ? output.quality : ''} readOnly /></label>
       <span data-testid="output-size">{outputLabel}</span>
       {outputError && <span role="alert">{outputError}</span>}
     </fieldset>

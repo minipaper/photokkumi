@@ -148,7 +148,7 @@ test('안전한 창 설정·IPC 거부·잘못된 이미지 거부', async () =>
   expect(prefs).toEqual({ sandbox: true, contextIsolation: true, nodeIntegration: false })
   expect(await page.evaluate(() => Object.keys(window.photokkumi).sort())).toEqual(['backupLibrary', 'choosePhotos', 'chooseSticker', 'deleteSticker', 'getOutputSettings', 'importStickers', 'listStickers', 'onCloseRequested', 'readPhoto', 'resolveClose', 'restoreLibrary', 'saveImage', 'setStickerReferences', 'updateOutputSettings', 'updateSticker', 'useSticker'])
   expect(await page.evaluate(() => typeof (window as unknown as { require?: unknown }).require)).toBe('undefined')
-  const invalid = await page.evaluate(() => window.photokkumi.saveImage({ photoId: '../../anything', png: new Uint8Array(), output: { format: 'png', width: null, preventUpscale: true, quality: 90 } }))
+  const invalid = await page.evaluate(() => window.photokkumi.saveImage({ photoId: '../../anything', png: new Uint8Array(), output: { format: 'png', width: null, preventUpscale: true, quality: 100 } }))
   expect(invalid.ok).toBe(false)
   expect((await page.evaluate(() => window.photokkumi.resolveClose({ requestId: 'forged', action: 'close' }))).ok).toBe(false)
   const corrupt = join(directory, 'corrupt.png'); await writeFile(corrupt, '<svg/>')
@@ -156,7 +156,7 @@ test('안전한 창 설정·IPC 거부·잘못된 이미지 거부', async () =>
   await expect(page.getByRole('alert')).toBeVisible()
   await expect(page.getByRole('button', { name: '사진 열기', exact: true })).toBeEnabled()
   await load()
-  const rejected = await page.evaluate(() => window.photokkumi.saveImage({ photoId: '00000000-0000-0000-0000-000000000000', png: new Uint8Array([137]), output: { format: 'png', width: null, preventUpscale: true, quality: 90 } }))
+  const rejected = await page.evaluate(() => window.photokkumi.saveImage({ photoId: '00000000-0000-0000-0000-000000000000', png: new Uint8Array([137]), output: { format: 'png', width: null, preventUpscale: true, quality: 100 } }))
   expect(rejected.ok).toBe(false)
   expect(await app.evaluate(async ({ net }) => (await net.fetch('app://bundle/../../package.json')).status)).toBe(403)
 })
@@ -669,11 +669,11 @@ test('출력 너비·확대 방지·회전 좌표와 PNG 크기 및 입력 경�
   const infos = await page.evaluate(() => window.photokkumi.choosePhotos())
   if (!infos.ok || !infos.value) throw new Error('photo list failed')
   const mismatch = await page.evaluate(({ id, bytes }) => window.photokkumi.saveImage({
-    photoId: id, png: new Uint8Array(bytes), output: { format: 'png', width: null, preventUpscale: true, quality: 90 }
+    photoId: id, png: new Uint8Array(bytes), output: { format: 'png', width: null, preventUpscale: true, quality: 100 }
   }), { id: infos.value[0].id, bytes: [...await readFile(join(directory, '한글 사진_kkumi.png'))] })
   expect(mismatch.ok).toBe(false)
   if (!mismatch.ok) expect(mismatch.error).toContain('출력 크기')
-  expect((await page.evaluate(() => window.photokkumi.updateOutputSettings({ format: 'png', width: 0, preventUpscale: true, quality: 90 }))).ok).toBe(false)
+  expect((await page.evaluate(() => window.photokkumi.updateOutputSettings({ format: 'png', width: 0, preventUpscale: true, quality: 100 }))).ok).toBe(false)
   await field('출력 너비', 2400)
   await expect(page.getByTestId('output-size')).toHaveText('1200 × 800 px')
   await save()
@@ -695,7 +695,7 @@ test('출력 너비·확대 방지·회전 좌표와 PNG 크기 및 입력 경�
   await expect(page.getByRole('button', { name: 'PNG로 저장' })).toBeEnabled()
 })
 
-test('투명 PNG와 반투명 스티커는 PNG 알파와 JPG 흰 배경·품질·충돌을 보존한다', async () => {
+test('투명 PNG와 반투명 스티커는 PNG 알파와 JPG 흰 배경·품질 100·충돌을 보존한다', async () => {
   await writeFile(source, makePng(400, 300, () => [0, 0, 0, 0]))
   await writeFile(stickerPath, makePng(80, 40, () => [255, 0, 0, 128]))
   const original = await readFile(source)
@@ -708,13 +708,13 @@ test('투명 PNG와 반투명 스티커는 PNG 알파와 JPG 흰 배경·품질�
   const infos = await page.evaluate(() => window.photokkumi.choosePhotos())
   if (!infos.ok || !infos.value) throw new Error('photo list failed')
   const transparentJpg = await page.evaluate(({ id, bytes }) => window.photokkumi.saveImage({
-    photoId: id, png: new Uint8Array(bytes), output: { format: 'jpg', width: null, preventUpscale: true, quality: 90 }
+    photoId: id, png: new Uint8Array(bytes), output: { format: 'jpg', width: null, preventUpscale: true, quality: 100 }
   }), { id: infos.value[0].id, bytes: [...original] })
   expect(transparentJpg.ok).toBe(false)
   if (!transparentJpg.ok) expect(transparentJpg.error).toContain('흰색 배경')
   await page.getByRole('combobox', { name: '출력 형식', exact: true }).selectOption('jpg')
-  await expect(page.getByRole('spinbutton', { name: 'JPG 품질', exact: true })).toBeEnabled()
-  await expect(page.getByRole('spinbutton', { name: 'JPG 품질', exact: true })).toHaveValue('90')
+  await expect(page.getByRole('spinbutton', { name: 'JPG 품질', exact: true })).toBeDisabled()
+  await expect(page.getByRole('spinbutton', { name: 'JPG 품질', exact: true })).toHaveValue('100')
   const row = page.getByRole('button', { name: '사진 1: 한글 사진.png', exact: true })
   await expect(row).toContainText('출력 설정 변경')
   await select(null); await page.getByRole('button', { name: '저장하고 다음' }).click()
@@ -736,13 +736,7 @@ test('투명 PNG와 반투명 스티커는 PNG 알파와 JPG 흰 배경·품질�
   expect(await readFile(join(directory, '한글 사진_kkumi.jpg'))).toEqual(bytes)
   expect((await readFile(join(directory, '한글 사진_kkumi_1.jpg'))).length).toBeGreaterThan(0)
   expect(await readFile(source)).toEqual(original)
-  await field('JPG 품질', 20)
-  await select(directory); await page.getByRole('button', { name: 'JPG로 저장' }).click()
-  await expect(page.getByRole('status')).toContainText('저장 완료')
-  expect(await readFile(join(directory, '한글 사진_kkumi_2.jpg'))).not.toEqual(bytes)
-  await field('JPG 품질', 0)
-  await expect(page.getByRole('button', { name: 'JPG로 저장' })).toBeDisabled()
-  await field('JPG 품질', 65)
+  expect((await page.evaluate(() => window.photokkumi.updateOutputSettings({ format: 'jpg', width: null, preventUpscale: true, quality: 90 }))).ok).toBe(false)
   await page.getByRole('checkbox', { name: '원본 크기', exact: true }).uncheck()
   await field('출력 너비', 200)
   await expect.poll(async () => {
@@ -751,7 +745,7 @@ test('투명 PNG와 반투명 스티커는 PNG 알파와 JPG 흰 배경·품질�
   }).toBe(200)
   await restartWithLibrary()
   await expect(page.getByRole('combobox', { name: '출력 형식', exact: true })).toHaveValue('jpg')
-  await expect(page.getByRole('spinbutton', { name: 'JPG 품질', exact: true })).toHaveValue('65')
+  await expect(page.getByRole('spinbutton', { name: 'JPG 품질', exact: true })).toHaveValue('100')
   await expect(page.getByRole('spinbutton', { name: '출력 너비', exact: true })).toHaveValue('200')
 })
 
@@ -772,7 +766,7 @@ test('출력 설정 쓰기 실패는 기존 설정과 편집을 보존하고 버
       return rename(...args)
     }
   })
-  await field('JPG 품질', 70)
+  await page.getByRole('checkbox', { name: '확대 방지', exact: true }).uncheck()
   await expect(page.getByRole('alert')).toContainText('출력 설정')
   expect(await readFile(path)).toEqual(before)
   await select(directory); await page.getByRole('button', { name: '저장하고 다음' }).click()

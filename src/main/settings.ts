@@ -7,25 +7,30 @@ export class OutputStore {
   private tail: Promise<unknown> = Promise.resolve()
   private path: string
   constructor(private directory: string) { this.path = join(directory, 'settings.json') }
-  private async read(): Promise<OutputSettings> {
+  private async read(): Promise<{ output: OutputSettings; migrate: boolean }> {
     let bytes: Buffer
     try { bytes = await readBounded(this.path, 4096) }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { ...DEFAULT_OUTPUT }; throw error }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { output: { ...DEFAULT_OUTPUT }, migrate: false }; throw error }
     const value = JSON.parse(bytes.toString('utf8')) as Record<string, unknown>
-    if (!value || Object.keys(value).length !== 2 || value.schemaVersion !== 1 || !validOutput(value.output)) throw new Error('출력 설정 파일이 손상되었습니다. 기존 파일은 보존합니다.')
-    return value.output
+    const legacy = value?.schemaVersion === 1
+    const candidate = value?.output as OutputSettings | undefined
+    const qualityValid = candidate && Number.isInteger(candidate.quality) && candidate.quality >= 1 && candidate.quality <= 100
+    if (!value || Object.keys(value).length !== 2 || ![1, 2].includes(value.schemaVersion as number) || !candidate
+      || !qualityValid || !validOutput(legacy ? { ...candidate, quality: 100 } : candidate)) throw new Error('출력 설정 파일이 손상되었습니다. 기존 파일은 보존합니다.')
+    return { output: { ...candidate, quality: 100 }, migrate: legacy }
   }
-  get(): Promise<OutputSettings> { return this.tail.then(() => this.read()) }
+  get(): Promise<OutputSettings> { return this.tail.then(async () => (await this.read()).output) }
+
   set(output: OutputSettings): Promise<OutputSettings> {
     const work = this.tail.then(async () => {
       if (!validOutput(output)) throw new Error('잘못된 출력 설정입니다.')
       const previous = await this.read() // Never replace a damaged file with defaults.
-      if (JSON.stringify(previous) === JSON.stringify(output)) return output
+      if (!previous.migrate && JSON.stringify(previous.output) === JSON.stringify(output)) return output
       await fs.mkdir(this.directory, { recursive: true })
       const temporary = join(this.directory, `.settings-${randomUUID()}.tmp`)
       try {
         const handle = await fs.open(temporary, 'wx', 0o600)
-        try { await handle.writeFile(JSON.stringify({ schemaVersion: 1, output })); await handle.sync() }
+        try { await handle.writeFile(JSON.stringify({ schemaVersion: 2, output })); await handle.sync() }
         finally { await handle.close() }
         await fs.rename(temporary, this.path)
       } catch (error) { await fs.unlink(temporary).catch(() => undefined); throw error }

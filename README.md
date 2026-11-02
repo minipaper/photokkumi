@@ -6,6 +6,8 @@
 
 **현재 상태: 스티커 라이브러리·한 사진 다중 스티커 편집 구현 및 macOS 자동 검증 완료.** PNG 다중 등록·이름/분류/즐겨찾기·재실행 유지·삭제·ZIP 백업/복원과 한 장 사진의 스티커 편집·원본 크기 PNG 저장을 제공합니다. 사진은 한 장씩 편집하며, 같은 스티커와 서로 다른 스티커를 여러 개 추가할 수 있습니다. 개별 선택·변환·복제·삭제·앞뒤 순서와 undo/redo를 지원합니다. 다중 사진·저장하고 다음은 아직 없습니다.
 
+선택한 스티커는 **Delete/Backspace로 삭제**, **방향키로 원본 기준 1px 이동**, **Shift+방향키로 10px 이동**합니다. 입력칸에서는 입력을 우선하며 캔버스를 클릭하면 스티커 조작으로 돌아갑니다. 회전 핸들에 마우스를 올리면 원형 화살표 커서가 표시됩니다. 삭제·이동도 실행 취소/다시 실행할 수 있습니다.
+
 ## 현재 앱 실행과 검증
 
 Node **24.22.2 LTS**, npm 사용. `.nvmrc`와 lockfile에 버전을 기록했습니다. npm 스크립트도 개발 의존성으로 고정한 Node 24.22.2를 사용합니다. Electron **45.2.1**, electron-vite **6.0.0**, React **19.3.1**, Konva **10.9.1** / react-konva **19.3.2**, TypeScript strict 구성입니다.
@@ -29,9 +31,9 @@ npm run build
 npm start
 ```
 
-실제 결과: 단위/파일 I/O 39개, Playwright Electron E2E 14개 통과(라이브러리 2개와 화면 배율 1·2 픽셀 회귀 포함), 타입·lint·빌드 통과(macOS 26.3 arm64). E2E는 native 파일 대화상자의 선택 결과만 대체하고 실제 main/preload/renderer, Canvas 인코딩과 파일 저장을 사용합니다. 최신 편집 변경은 [여러 스티커 수정 기록](./docs/multiple-stickers.md), 라이브러리 형식·제한은 [단계 B 기록](./docs/stage-b.md)에 있으며, 이전 검증은 [단계 A 안정화](./docs/stage-a-stabilization.md), [의존성 감사 분석](./docs/dependency-audit.md), [Windows 검증 절차](./docs/windows-validation.md)에 있습니다.
+실제 결과: 단위/파일 I/O 39개, Playwright Electron E2E 15개 통과(라이브러리 2개와 화면 배율 1·2 픽셀 회귀 포함), 타입·lint·빌드 통과(macOS 26.3 arm64). E2E는 native 파일 대화상자의 선택 결과만 대체하고 실제 main/preload/renderer, Canvas 인코딩과 파일 저장을 사용합니다. 키보드 조작은 [키보드 조작 기록](./docs/sticker-keyboard.md), 여러 스티커 편집은 [여러 스티커 수정 기록](./docs/multiple-stickers.md), 라이브러리 형식·제한은 [단계 B 기록](./docs/stage-b.md)에 있으며, 이전 검증은 [단계 A 안정화](./docs/stage-a-stabilization.md), [의존성 감사 분석](./docs/dependency-audit.md), [Windows 검증 절차](./docs/windows-validation.md)에 있습니다.
 
-Windows x64 NSIS 설정과 `npm run package:win` 스크립트는 준비했지만 **단계 B Windows 실행 및 설치/GUI 검증은 대기**입니다. 단계 A의 Windows E2E 11개와 기본 편집·저장은 사용자에게서 성공 보고를 받았습니다. 코드 서명·업데이트·릴리스 게시를 설정하지 않았습니다.
+키보드 조작 추가 전 Windows E2E **14개 전체 통과(16.5초)**를 사용자에게서 보고받았습니다. 라이브러리·다중 스티커 편집과 화면 배율 1·2 회귀를 포함합니다. Windows x64 NSIS 설정과 `npm run package:win` 스크립트는 준비했지만 **패키징 및 최신 설치본의 수동 GUI 검증은 대기**입니다. 단계 A의 기본 수동 편집·저장은 이전에 사용자 성공 보고를 받았습니다. 코드 서명·업데이트·릴리스 게시를 설정하지 않았습니다.
 
 현재 제한:
 

@@ -4,6 +4,8 @@ import type Konva from 'konva'
 import type { Placement } from '../shared/model'
 import type { Scene } from '../shared/scene'
 import { fitScale } from '../shared/model'
+// A bundled vector cursor keeps the rotation affordance crisp at high DPI.
+const rotationCursor = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><g fill="none" stroke="white" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M24 11a10 10 0 1 0 1 9M24 4v8h-8"/></g><g fill="none" stroke="#262b36" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M24 11a10 10 0 1 0 1 9M24 4v8h-8"/></g></svg>')}") 16 16, crosshair`
 interface Props {
   photo: { width: number; height: number; bitmap: ImageBitmap }
   assets: ReadonlyMap<string, { bitmap: ImageBitmap }>
@@ -30,7 +32,8 @@ export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChang
   const deselect = (event: Konva.KonvaEventObject<Event>) => {
     if (!disabled && event.target === event.target.getStage()) onSelect(null)
   }
-  return <div ref={area} className="canvas-area" data-testid="canvas-area">
+  return <div ref={area} className="canvas-area" data-testid="canvas-area" tabIndex={0} aria-label="사진 편집 캔버스"
+    onMouseDownCapture={() => area.current?.focus({ preventScroll: true })}>
     <div className="canvas-frame" data-testid="canvas-frame" data-scale={scale}>
       <Stage width={photo.width * scale} height={photo.height * scale} scaleX={scale} scaleY={scale} onMouseDown={deselect} onTouchStart={deselect}>
         <Layer ref={layer => { layer?.getNativeCanvasElement().setAttribute('data-testid', 'photo-content') }}>
@@ -55,6 +58,7 @@ export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChang
         </Layer>
         <Layer ref={layer => { layer?.getNativeCanvasElement().setAttribute('data-testid', 'editor-overlay') }}>
           <Transformer ref={transformer} enabledAnchors={['top-left', 'top-right', 'bottom-left', 'bottom-right']}
+            rotateAnchorCursor={rotationCursor}
             keepRatio flipEnabled={false} rotateEnabled={!disabled} resizeEnabled={!disabled}
             boundBoxFunc={(oldBox, newBox) => Math.abs(newBox.width) < 4 || Math.abs(newBox.height) < 4 || Math.abs(newBox.width) > 32768 * scale || Math.abs(newBox.height) > 32768 * scale ? oldBox : newBox} />
         </Layer>

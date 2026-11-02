@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { ImageAsset, PhotoApi, Placement } from '../shared/model'
 import { validPlacement } from '../shared/model'
@@ -143,6 +143,28 @@ function App() {
     const current = currentHistory.current.present
     editScene(updateSelected({ ...current, selectedId: id }, value))
   }
+  function handleEditorKey(event: KeyboardEvent<HTMLElement>) {
+    const target = event.target
+    if (event.defaultPrevented || event.nativeEvent.isComposing || event.altKey || event.ctrlKey || event.metaKey
+      || operation.current || closeRequest || (target instanceof HTMLElement
+        && (target.isContentEditable || target.closest('input, textarea, select, dialog, [role="textbox"]')))) return
+    const current = currentHistory.current.present
+    const selected = current.stickers.find(item => item.id === current.selectedId)
+    if (!selected) return
+    if (event.key === 'Delete' || event.key === 'Backspace') {
+      event.preventDefault()
+      if (!event.repeat) editScene(removeSelected(current))
+      return
+    }
+    const step = event.shiftKey ? 10 : 1
+    const offset: Record<string, [number, number]> = {
+      ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step]
+    }
+    const delta = offset[event.key]
+    if (!delta) return
+    event.preventDefault()
+    change({ ...selected, x: selected.x + delta[0], y: selected.y + delta[1] }, selected.id)
+  }
   const duplicate = () => run(async () => { editScene(duplicateSelected(currentHistory.current.present, crypto.randomUUID())) })
   const clearScene = () => {
     if (!window.confirm('사진의 모든 스티커와 실행취소 이력을 비울까요? 이 작업은 실행 취소할 수 없습니다.')) return
@@ -193,7 +215,7 @@ function App() {
       throw error
     }
   })
-  return <main>
+  return <main onKeyDown={handleEditorKey}>
     <dialog ref={closeDialog} aria-labelledby="close-title" onCancel={event => { event.preventDefault(); if (!busy) cancelClose() }}>
       <h2 id="close-title">저장하지 않은 편집</h2>
       <p>편집한 사진을 저장하고 닫을까요?</p>
@@ -233,7 +255,7 @@ function App() {
           <button disabled={busy || !placement || placement.zOrder === 0} onClick={() => editScene(reorderSelected(currentHistory.current.present, -1))}>뒤로</button>
           <button disabled={busy || !placement || placement.zOrder === scene.stickers.length - 1} onClick={() => editScene(reorderSelected(currentHistory.current.present, 1))}>앞으로</button>
         </div>
-        <p>스티커를 드래그해 이동하세요. 모서리로 비율을 유지하며 크기를 바꾸고, 위쪽 핸들로 회전하세요.</p>
+        <p>스티커를 드래그해 이동하세요. 모서리로 비율을 유지하며 크기를 바꾸고, 위쪽 핸들로 회전하세요. 선택 후 방향키로 1px, Shift+방향키로 10px 이동하고 Delete·Backspace로 삭제합니다.</p>
         {placement && <fieldset disabled={busy}>
           <label>중심 X<input aria-label="중심 X" type="number" value={Math.round(placement.x * 100) / 100} onChange={e => change({ ...placement, x: e.target.valueAsNumber })} /></label>
           <label>중심 Y<input aria-label="중심 Y" type="number" value={Math.round(placement.y * 100) / 100} onChange={e => change({ ...placement, y: e.target.valueAsNumber })} /></label>

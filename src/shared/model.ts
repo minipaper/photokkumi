@@ -19,6 +19,8 @@ export interface Placement {
 }
 export interface StickerInstance extends Placement { id: string; assetId: string; zOrder: number }
 export type Result<T> = { ok: true; value: T } | { ok: false; error: string }
+export interface PhotoBatch { photos: PhotoInfo[]; rejected: string[] }
+export interface SaveReceipt { name: string; folderLabel: string }
 export interface SaveRequest { photoId: string; png: Uint8Array; output: OutputSettings }
 export interface CloseResolution { requestId: string; action: 'close' | 'cancel' }
 export interface PhotoApi {
@@ -34,10 +36,11 @@ export interface PhotoApi {
   restoreLibrary(): Promise<Result<LibrarySticker[] | null>>
   choosePhotos(): Promise<Result<PhotoInfo[] | null>>
   readPhoto(id: string): Promise<Result<ImageAsset>>
-  chooseSticker(): Promise<Result<ImageAsset | null>>
+  choosePhotoFolder(): Promise<Result<PhotoBatch | null>>
+  chooseOutputFolder(): Promise<Result<string | null>>
   getOutputSettings(): Promise<Result<OutputSettings>>
   updateOutputSettings(output: OutputSettings): Promise<Result<OutputSettings>>
-  saveImage(request: SaveRequest): Promise<Result<string | null>>
+  saveImage(request: SaveRequest): Promise<Result<SaveReceipt | null>>
 }
 export function fitScale(width: number, height: number, availableWidth: number, availableHeight: number): number {
   return Math.min(1, Math.max(1, availableWidth) / width, Math.max(1, availableHeight) / height)

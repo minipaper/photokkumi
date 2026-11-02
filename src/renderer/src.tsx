@@ -25,6 +25,9 @@ function App() {
   const [output, setOutput] = useState<OutputSettings>({ ...DEFAULT_OUTPUT })
   const [outputLoaded, setOutputLoaded] = useState(false)
   const outputWrite = useRef<Promise<void>>(Promise.resolve())
+  const [outputFolder, setOutputFolder] = useState<string | null>(null)
+  const [libraryOpen, setLibraryOpen] = useState(false)
+  const libraryDialog = useRef<HTMLDialogElement>(null)
   const [photos, setPhotos] = useState<PhotoInfo[]>([])
   const sessions = useRef(new Map<string, PhotoSession>())
   const activeId = useRef<string | null>(null)
@@ -52,10 +55,13 @@ function App() {
   useEffect(() => {
     if (!closeRequest || busy) return
     switchDialog.current?.close(); setPendingPhoto(null)
+    libraryDialog.current?.close(); setLibraryOpen(false)
     if (!dirty) {
       void resolveClose('close').catch(value => setError(String(value)))
     } else if (!closeDialog.current?.open) closeDialog.current?.showModal()
   }, [closeRequest, busy, dirty])
+  useEffect(() => { if (libraryOpen && !libraryDialog.current?.open) libraryDialog.current?.showModal() }, [libraryOpen])
+  const closeLibrary = () => { if (!operation.current) { libraryDialog.current?.close(); setLibraryOpen(false) } }
   useEffect(() => () => photo?.bitmap.close(), [photo])
   useEffect(() => {
     const keep = new Set([...sessions.current.values()].flatMap(sessionAssets))
@@ -171,9 +177,19 @@ function App() {
   }
   function handleEditorKey(event: KeyboardEvent<HTMLElement>) {
     const target = event.target
-    if (event.defaultPrevented || event.nativeEvent.isComposing || event.altKey || event.ctrlKey || event.metaKey
-      || operation.current || closeRequest || pendingPhoto || (target instanceof HTMLElement
+    if (event.defaultPrevented || event.nativeEvent.isComposing || event.altKey
+      || operation.current || closeRequest || pendingPhoto || libraryOpen || (target instanceof HTMLElement
         && (target.isContentEditable || target.closest('input, textarea, select, dialog, [role="textbox"]')))) return
+    if (event.ctrlKey || event.metaKey) {
+      const key = event.key.toLowerCase()
+      if (!photo || !['z', 'y', 'd'].includes(key)) return
+      event.preventDefault()
+      const history = currentHistory.current
+      if (key === 'd') { if (history.present.selectedId && !event.repeat) void duplicate(); return }
+      const next = key === 'y' || event.shiftKey ? redoScene(history) : undoScene(history)
+      if (next !== history) applyHistory(next)
+      return
+    }
     const current = currentHistory.current.present
     const selected = current.stickers.find(item => item.id === current.selectedId)
     if (!selected) return
@@ -225,6 +241,21 @@ function App() {
     if (!activeId.current && result.value[0]) await activatePhoto(result.value[0].id)
     setStatus('사진을 추가했습니다. 라이브러리의 스티커를 클릭해 배치하세요.')
   })
+  const choosePhotoFolder = () => run(async () => {
+    const result = await window.photokkumi.choosePhotoFolder()
+    if (!result.ok) throw new Error(result.error)
+    if (!result.value) return
+    const { photos: imported, rejected } = result.value
+    for (const item of imported) if (!sessions.current.has(item.id)) sessions.current.set(item.id, createPhotoSession())
+    setPhotos(imported)
+    if (!activeId.current && imported[0]) await activatePhoto(imported[0].id)
+    setStatus(`사진 ${imported.length}장 · JPG/PNG만 가져옵니다.${rejected.length ? ` 읽을 수 없는 파일 ${rejected.length}개 제외: ${rejected.slice(0, 3).join(', ')}${rejected.length > 3 ? ' 외' : ''}` : ''}`)
+  })
+  const chooseOutputFolder = () => run(async () => {
+    const result = await window.photokkumi.chooseOutputFolder()
+    if (!result.ok) throw new Error(result.error)
+    if (result.value) { setOutputFolder(result.value); setStatus('출력 폴더를 지정했습니다. 다음 저장부터 이 폴더를 사용합니다.') }
+  })
   const requestPhoto = (id: string) => {
     if (operation.current || pendingPhoto || closeRequest || id === activeId.current) return
     if (dirty) { setPendingPhoto(id); switchDialog.current?.showModal() }
@@ -237,14 +268,6 @@ function App() {
     await activatePhoto(pendingPhoto, action === 'discard')
     cancelSwitch()
   })
-  const chooseSticker = () => run(async () => {
-    if (!photo) return
-    const result = await window.photokkumi.chooseSticker()
-    if (!result.ok) throw new Error(result.error)
-    if (!result.value) return
-    await placeSticker(result.value)
-    await refreshLibrary()
-  })
   async function saveCurrent(): Promise<boolean> {
     if (!photo) return false
     if (!outputLoaded) throw new Error('출력 설정을 불러온 뒤 저장할 수 있습니다.')
@@ -256,8 +279,9 @@ function App() {
     const result = await window.photokkumi.saveImage({ photoId: photo.id, png, output })
     if (!result.ok) throw new Error(result.error)
     if (!result.value) { setStatus('저장이 취소되었습니다. 편집 내용은 유지됩니다.'); return false }
-    sessions.current.set(photo.id, savePhotoSession(sessions.current.get(photo.id)!, outputKey(output)))
-    setDirty(false); setStatus(`저장 완료 · ${result.value}`)
+    sessions.current.set(photo.id, savePhotoSession(sessions.current.get(photo.id)!, outputKey(output), result.value.folderLabel))
+    setOutputFolder(result.value.folderLabel)
+    setDirty(false); setStatus(`저장 완료 · ${result.value.name}`)
     await syncReferences(photo.id)
     return true
   }
@@ -266,7 +290,7 @@ function App() {
   const saveNext = () => run(async () => {
     if (!photo) return
     const session = sessions.current.get(photo.id)!
-    if ((session.dirty || !session.saved || session.outputKey !== outputKey(output)) && !await saveCurrent()) return
+    if ((session.dirty || !session.saved || session.outputKey !== outputKey(output) || session.savedFolder !== outputFolder) && !await saveCurrent()) return
     const next = photos[photoIndex + 1]
     if (next) await activatePhoto(next.id)
     else setStatus('마지막 사진까지 저장했습니다. 작업이 완료되었습니다.')
@@ -294,10 +318,20 @@ function App() {
   })
   let outputError = '', outputLabel = ''
   try {
-    if (!validOutput(output)) throw new Error('출력 너비는 1~8192 정수로 입력하세요. JPG 품질은 100입니다.')
+    if (!validOutput(output)) throw new Error('출력 길이는 1~8192 정수로 입력하세요. JPG 품질은 100입니다.')
     if (photo) { const size = outputSize(photo.width, photo.height, output); outputLabel = `${size.width} × ${size.height} px` }
   } catch (value) { outputError = value instanceof Error ? value.message : '출력 설정을 확인하세요.' }
+  const libraryProps = { items: libraryItems, disabled: busy, canUse: !!photo, activeIds: referencedIds,
+    onUse: useSticker, onImport: importStickers, onBackup: backupLibrary, onRestore: restoreLibrary,
+    onUpdate: updateSticker, onDelete: deleteSticker }
   return <main onKeyDown={handleEditorKey}>
+    <dialog ref={libraryDialog} className="library-dialog" aria-label="스티커 관리" onCancel={event => { event.preventDefault(); closeLibrary() }}>
+      {libraryOpen && <>
+        <div className="manager-heading"><h2>스티커 관리</h2><button disabled={busy} onClick={closeLibrary}>관리 닫기</button></div>
+        <LibraryPanel {...libraryProps} mode="manage" />
+        {error && <p role="alert">{error}</p>}
+      </>}
+    </dialog>
     <dialog ref={switchDialog} aria-labelledby="switch-title" onCancel={event => { event.preventDefault(); if (!busy) cancelSwitch() }}>
       <h2 id="switch-title">사진을 바꾸기 전 저장</h2>
       <p>현재 사진의 수정 내용을 저장할까요? 버리기를 선택하면 마지막 저장 상태로 돌아갑니다.</p>
@@ -320,43 +354,33 @@ function App() {
     <header><div><h1>포토꾸미</h1><p>사진마다 스티커를 배치하고 저장하세요</p></div><span className="badge">{photo ? `${photoIndex + 1} / ${photos.length}` : '사진 편집'}</span></header>
     <nav aria-label="파일 작업">
       <button onClick={choosePhoto} disabled={busy || !!pendingPhoto}>사진 열기</button>
-      <button onClick={chooseSticker} disabled={busy || !photo}>PNG 스티커 열기</button>
+      <button onClick={choosePhotoFolder} disabled={busy || !!pendingPhoto}>입력 폴더 선택</button>
+      <button onClick={chooseOutputFolder} disabled={busy}>출력 폴더 선택</button>
       <button onClick={saveNext} disabled={busy || !photo || !outputLoaded || !!outputError}>저장하고 다음</button>
       <button className="primary" onClick={save} disabled={busy || !photo || !outputLoaded || !!outputError}>{busy ? '처리 중…' : output.format === 'jpg' ? 'JPG로 저장' : 'PNG로 저장'}</button>
     </nav>
+    <div className="output-folder" title={outputFolder ?? undefined}>출력 폴더: <span data-testid="output-folder">{outputFolder ?? '미지정 · 첫 저장 시 선택'}</span></div>
     <fieldset className="output-settings" disabled={busy || !outputLoaded} aria-label="출력 설정">
       <label>형식<select aria-label="출력 형식" value={output.format} onChange={e => setOutput({ ...output, format: e.target.value as 'png' | 'jpg' })}>
         <option value="png">PNG</option><option value="jpg">JPG</option>
       </select></label>
-      <label><input type="checkbox" checked={output.width === null} onChange={e => setOutput({ ...output, width: e.target.checked ? null : photo?.width ?? 1200 })} />원본 크기</label>
-      <label>출력 너비<input aria-label="출력 너비" type="number" min="1" max="8192" step="1" disabled={output.width === null} value={output.width === null || !Number.isFinite(output.width) ? '' : output.width} onChange={e => setOutput({ ...output, width: e.target.valueAsNumber })} /></label>
+      <label><input type="checkbox" checked={output.resizeEnabled} onChange={e => setOutput({ ...output, resizeEnabled: e.target.checked })} />블로그 크기로 리사이즈</label>
+      <label>기준<select aria-label="리사이즈 기준" disabled={!output.resizeEnabled} value={output.resizeBasis} onChange={e => setOutput({ ...output, resizeBasis: e.target.value as 'width' | 'longEdge' })}>
+        <option value="width">가로 너비</option><option value="longEdge">긴 축</option>
+      </select></label>
+      <label>가로 사진<input aria-label="가로 사진 길이" type="number" min="1" max="8192" disabled={!output.resizeEnabled} value={Number.isFinite(output.landscapeSize) ? output.landscapeSize : ''} onChange={e => setOutput({ ...output, landscapeSize: e.target.valueAsNumber })} />px</label>
+      <label>세로 사진<input aria-label="세로 사진 길이" type="number" min="1" max="8192" disabled={!output.resizeEnabled} value={Number.isFinite(output.portraitSize) ? output.portraitSize : ''} onChange={e => setOutput({ ...output, portraitSize: e.target.valueAsNumber })} />px</label>
       <label><input type="checkbox" checked={output.preventUpscale} onChange={e => setOutput({ ...output, preventUpscale: e.target.checked })} />확대 방지</label>
       <label>JPG 품질<input aria-label="JPG 품질" type="number" min="100" max="100" step="1" disabled value={Number.isFinite(output.quality) ? output.quality : ''} readOnly /></label>
       <span data-testid="output-size">{outputLabel}</span>
       {outputError && <span role="alert">{outputError}</span>}
     </fieldset>
     <section className="workspace">
-      {!!photos.length && <section className="photo-list" aria-label="사진 목록">
-        <h2>사진 {photoIndex + 1} / {photos.length}</h2>
-        <div className="photo-navigation">
-          <button disabled={busy || photoIndex <= 0} onClick={() => requestPhoto(photos[photoIndex - 1].id)}>이전 사진</button>
-          <button disabled={busy || photoIndex >= photos.length - 1} onClick={() => requestPhoto(photos[photoIndex + 1].id)}>다음 사진</button>
-        </div>
-        {photos.map((item, index) => {
-          const session = sessions.current.get(item.id)!
-          return <button key={item.id} className="photo-item" disabled={busy} aria-label={`사진 ${index + 1}: ${item.name}`} aria-pressed={photo?.id === item.id} onClick={() => requestPhoto(item.id)}>
-            <img src={item.thumbnail} alt="" width="80" height="60" loading="lazy" />
-            <span>{index + 1}. {item.name}</span>
-            <small>{session.dirty ? (session.saved ? '저장 후 수정' : '수정됨') : session.saved ? (session.outputKey === outputKey(output) ? '저장 완료' : '출력 설정 변경') : '미작업'}</small>
-          </button>
-        })}
-      </section>}
       {photo ? <EditorCanvas key={photo.id} photo={photo} assets={assets.current} scene={scene} disabled={busy} onSelect={selectInstance} onChange={(id, value) => change(value, id)} />
         : <div className="empty">사진을 열면 이곳에서 편집할 수 있습니다.<small>사진 여러 장 JPG/PNG · 스티커 PNG · 결과는 JPG/PNG</small></div>}
       <aside>
-        <LibraryPanel items={libraryItems} disabled={busy} canUse={!!photo} activeIds={referencedIds}
-          onUse={useSticker} onImport={importStickers} onBackup={backupLibrary} onRestore={restoreLibrary}
-          onUpdate={updateSticker} onDelete={deleteSticker} />
+        <button className="manage-library" disabled={busy} onClick={() => setLibraryOpen(true)}>스티커 관리</button>
+        <div hidden={libraryOpen}><LibraryPanel {...libraryProps} mode="pick" /></div>
         <h2>사진에 붙인 스티커 <span data-testid="instance-count">{scene.stickers.length}</span>/200</h2>
         <div className="instance-tools">
           <button disabled={busy || !history.past.length} onClick={() => applyHistory(undoScene(currentHistory.current))}>실행 취소</button>
@@ -386,7 +410,22 @@ function App() {
         {sticker && <p className="file-info">스티커: {sticker.name}</p>}
       </aside>
     </section>
-    <footer><p role="status" aria-live="polite">{status}</p>{error && <p role="alert">{error}</p>}<small>원본은 바꾸지 않습니다. 새 JPG/PNG 파일로 저장합니다. 사진별 편집은 앱을 닫으면 사라집니다. 저장한 결과와 스티커 라이브러리는 유지됩니다.</small></footer>
+      {!!photos.length && <section className="photo-list" aria-label="사진 목록">
+        <h2>사진 {photoIndex + 1} / {photos.length}</h2>
+        <div className="photo-navigation">
+          <button disabled={busy || photoIndex <= 0} onClick={() => requestPhoto(photos[photoIndex - 1].id)}>이전 사진</button>
+          <button disabled={busy || photoIndex >= photos.length - 1} onClick={() => requestPhoto(photos[photoIndex + 1].id)}>다음 사진</button>
+        </div>
+        {photos.map((item, index) => {
+          const session = sessions.current.get(item.id)!
+          return <button key={item.id} className="photo-item" disabled={busy} aria-label={`사진 ${index + 1}: ${item.name}`} aria-pressed={photo?.id === item.id} onClick={() => requestPhoto(item.id)}>
+            <img src={item.thumbnail} alt="" width="80" height="60" loading="lazy" />
+            <span>{index + 1}. {item.name}</span>
+            <small>{session.dirty ? (session.saved ? '저장 후 수정' : '수정됨') : session.saved ? (session.outputKey !== outputKey(output) ? '출력 설정 변경' : session.savedFolder !== outputFolder ? '출력 폴더 변경' : '저장 완료') : '미작업'}</small>
+          </button>
+        })}
+      </section>}
+    <footer><p role="status" aria-live="polite">{status}</p>{error && !libraryOpen && !pendingPhoto && <p role="alert">{error}</p>}<small>원본은 바꾸지 않습니다. 새 JPG/PNG 파일로 저장합니다. 사진별 편집은 앱을 닫으면 사라집니다. 저장한 결과와 스티커 라이브러리는 유지됩니다.</small></footer>
   </main>
 }
 createRoot(document.getElementById('root')!).render(<App />)

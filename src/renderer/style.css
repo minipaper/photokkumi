@@ -52,3 +52,41 @@ aside { width: 300px; flex-shrink: 0; }
 .output-settings input[type=number] { width: 80px; }
 .output-settings input[type=checkbox] { width: auto; }
 .output-settings select { padding: 6px; }
+/* A filmstrip below the editor keeps photo navigation out of the canvas. */
+.photo-list { width: 100%; flex: none; display: flex; align-items: stretch; gap: 8px; padding: 10px; border: 1px solid #dce0e8; border-radius: 10px; overflow-x: auto; overflow-y: hidden; background: white; }
+.photo-list h2 { flex: 0 0 100px; font-size: 14px; align-self: center; margin: 0; }
+.photo-navigation { flex: 0 0 110px; flex-direction: column; margin: 0; }
+.photo-item { flex: 0 0 120px; width: 120px; margin: 0; padding: 5px; gap: 2px; }
+.photo-item img { height: 48px; }
+.photo-item span { display: block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.photo-item small { font-size: 11px; }
+.output-folder { font-size: 12px; color: #667085; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-height: 16px; }
+.canvas-editor { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.view-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 7px 10px; background: #f8f9fb; border-bottom: 1px solid #dce0e8; }
+.view-tools button { padding: 5px 9px; font-size: 12px; }
+.view-tools span { min-width: 42px; text-align: center; font-size: 12px; }
+.view-tools button[aria-pressed=true] { background: #eee9ff; border-color: #6047cb; }
+.manage-library { width: 100%; margin-bottom: 12px; }
+dialog.library-dialog { width: min(850px, 90vw); max-width: 90vw; max-height: 85vh; overflow: auto; }
+.manager-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.manager-heading h2 { margin: 0; }
+.library-dialog .sticker-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); max-height: 45vh; }
+.library-dialog .library { margin-bottom: 0; padding-bottom: 0; border-bottom: 0; }
+.library-dialog .sticker-actions { justify-content: center; }
+main { gap: 10px; padding: 16px; }
+nav { flex-wrap: wrap; }
+@media (max-height: 700px) { header p { display: none; } .photo-item img { height: 32px; } .photo-list { padding: 6px; } footer small { display: none; } }
+@media (max-height: 700px), (max-width: 900px) {
+  main { padding: 10px; gap: 6px; }
+  header h1 { font-size: 20px; } header p { display: none; }
+  nav { gap: 6px; } nav button { padding: 7px 10px; font-size: 12px; }
+  .output-settings { padding: 6px; gap: 5px 8px; } .output-settings label { font-size: 11px; gap: 4px; }
+  .output-settings input[type=number] { width: 62px; padding: 5px; } .output-settings select { padding: 4px; }
+  .output-folder { font-size: 11px; min-height: 14px; }
+  .view-tools { gap: 4px; padding: 5px; } .view-tools small { display: none; }
+  .photo-list { padding: 5px; gap: 6px; } .photo-list h2 { flex-basis: 60px; font-size: 12px; }
+  .photo-navigation { flex-basis: 90px; } .photo-navigation button { padding: 4px; }
+  .photo-item { flex-basis: 100px; width: 100px; } .photo-item img { height: 28px; }
+  footer small { display: none; } footer p { margin: 2px 0; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  aside { width: 250px; padding: 12px; }
+}

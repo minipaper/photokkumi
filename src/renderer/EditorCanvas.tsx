@@ -17,25 +17,59 @@ interface Props {
 export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChange }: Props) {
   const area = useRef<HTMLDivElement>(null)
   const images = useRef(new Map<string, Konva.Image>())
+  const stage = useRef<Konva.Stage>(null)
+  const [zoom, setZoom] = useState<number | null>(null)
+  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [panMode, setPanMode] = useState(false)
   const transformer = useRef<Konva.Transformer>(null)
   const [size, setSize] = useState({ width: 600, height: 480 })
   useEffect(() => {
-    const observer = new ResizeObserver(([entry]) => setSize({ width: entry.contentRect.width - 48, height: entry.contentRect.height - 48 }))
+    const observer = new ResizeObserver(([entry]) => setSize({ width: Math.max(1, entry.contentRect.width - 48), height: Math.max(1, entry.contentRect.height - 48) }))
     observer.observe(area.current!)
     return () => observer.disconnect()
   }, [])
   useEffect(() => {
     const image = scene.selectedId ? images.current.get(scene.selectedId) : undefined
-    transformer.current?.nodes(image ? [image] : [])
-  }, [scene.selectedId, scene.stickers])
-  const scale = fitScale(photo.width, photo.height, size.width, size.height)
-  const deselect = (event: Konva.KonvaEventObject<Event>) => {
-    if (!disabled && event.target === event.target.getStage()) onSelect(null)
+    transformer.current?.nodes(image && !panMode ? [image] : [])
+  }, [scene.selectedId, scene.stickers, panMode])
+  const scale = zoom ?? fitScale(photo.width, photo.height, size.width, size.height)
+  const viewport = { width: Math.min(photo.width * scale, size.width), height: Math.min(photo.height * scale, size.height) }
+  const constrain = (point: { x: number; y: number }, nextScale = scale) => ({
+    x: Math.max(Math.min(0, Math.min(photo.width * nextScale, size.width) - photo.width * nextScale), Math.min(0, point.x)),
+    y: Math.max(Math.min(0, Math.min(photo.height * nextScale, size.height) - photo.height * nextScale), Math.min(0, point.y))
+  })
+  const position = constrain(pan)
+  function changeZoom(next: number, pointer?: { x: number; y: number }) {
+    const nextScale = Math.max(0.01, Math.min(4, next))
+    const origin = pointer ?? { x: viewport.width / 2, y: viewport.height / 2 }
+    const target = pointer ?? { x: Math.min(photo.width * nextScale, size.width) / 2, y: Math.min(photo.height * nextScale, size.height) / 2 }
+    setPan(constrain({ x: target.x - (origin.x - position.x) / scale * nextScale, y: target.y - (origin.y - position.y) / scale * nextScale }, nextScale))
+    setZoom(nextScale)
   }
-  return <div ref={area} className="canvas-area" data-testid="canvas-area" tabIndex={0} aria-label="사진 편집 캔버스"
+  const deselect = (event: Konva.KonvaEventObject<Event>) => {
+    if (!disabled && !panMode && event.target === event.target.getStage()) onSelect(null)
+  }
+  return <section className="canvas-editor">
+    <div className="view-tools" aria-label="보기 조작">
+      <button disabled={disabled} onClick={() => { setZoom(null); setPan({ x: 0, y: 0 }); setPanMode(false) }}>화면 맞춤</button>
+      <button disabled={disabled} onClick={() => changeZoom(scale / 1.25)} aria-label="축소">−</button>
+      <span data-testid="zoom-level">{Math.round(scale * 100)}%</span>
+      <button disabled={disabled} onClick={() => changeZoom(scale * 1.25)} aria-label="확대">+</button>
+      <button disabled={disabled} onClick={() => changeZoom(1)}>100%</button>
+      <button disabled={disabled} aria-pressed={panMode} onClick={() => setPanMode(!panMode)}>화면 이동</button>
+      <small>Ctrl/Cmd+휠로 확대·축소</small>
+    </div>
+    <div ref={area} className="canvas-area" data-testid="canvas-area" tabIndex={0} aria-label="사진 편집 캔버스"
     onMouseDownCapture={() => area.current?.focus({ preventScroll: true })}>
-    <div className="canvas-frame" data-testid="canvas-frame" data-scale={scale}>
-      <Stage width={photo.width * scale} height={photo.height * scale} scaleX={scale} scaleY={scale} onMouseDown={deselect} onTouchStart={deselect}>
+    <div className="canvas-frame" data-testid="canvas-frame" data-scale={scale} data-pan-x={position.x} data-pan-y={position.y} style={{ cursor: panMode ? 'grab' : undefined }}>
+      <Stage ref={stage} width={viewport.width} height={viewport.height} x={position.x} y={position.y} scaleX={scale} scaleY={scale}
+        draggable={panMode && !disabled} dragBoundFunc={point => constrain(point)}
+        onDragEnd={event => { if (event.target === stage.current) setPan(constrain(event.target.position())) }}
+        onWheel={event => {
+          if (disabled || (!event.evt.ctrlKey && !event.evt.metaKey)) return
+          event.evt.preventDefault()
+          changeZoom(scale * (event.evt.deltaY < 0 ? 1.1 : 1 / 1.1), stage.current?.getPointerPosition() ?? undefined)
+        }} onMouseDown={deselect} onTouchStart={deselect}>
         <Layer ref={layer => { layer?.getNativeCanvasElement().setAttribute('data-testid', 'photo-content') }}>
           <Group clipX={0} clipY={0} clipWidth={photo.width} clipHeight={photo.height}>
             <CanvasImage image={photo.bitmap} width={photo.width} height={photo.height} listening={false} />
@@ -44,7 +78,7 @@ export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChang
               image={assets.get(placement.assetId)?.bitmap}
               x={placement.x} y={placement.y} width={placement.width} height={placement.height}
               offsetX={placement.width / 2} offsetY={placement.height / 2} rotation={placement.rotation}
-              draggable={!disabled} listening={!disabled}
+              draggable={!disabled && !panMode} listening={!disabled && !panMode}
               onMouseDown={() => onSelect(placement.id)} onTouchStart={() => onSelect(placement.id)}
               onDragStart={() => onSelect(placement.id)}
               onDragEnd={event => onChange(placement.id, { ...placement, x: event.target.x(), y: event.target.y() })}
@@ -65,4 +99,5 @@ export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChang
       </Stage>
     </div>
   </div>
+  </section>
 }

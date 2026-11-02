@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { realpath } from 'node:fs/promises'
-import { basename } from 'node:path'
+import { realpath, opendir } from 'node:fs/promises'
+import { basename, dirname, extname, join } from 'node:path'
 import type { ImageAsset, PhotoInfo } from '../shared/model'
 import { inspectImage, MAX_FILE_BYTES } from './images'
 import { readBounded } from './library'
@@ -16,22 +16,46 @@ export class PhotoStore {
     return photo
   }
   clear() { this.records.clear() }
-  async add(paths: string[]): Promise<PhotoInfo[]> {
+  async add(paths: string[], rejected?: string[], folderRoot?: string): Promise<PhotoInfo[]> {
     // Limit before I/O; stage every candidate before granting any new ID.
     if (paths.length > 100) throw new Error('사진은 최대 100장까지 열 수 있습니다.')
     const candidates = new Map([...this.records.values()].map(item => [item.path, item]))
     for (const input of paths) {
-      const path = await realpath(input)
+      let path: string
+      try {
+        path = await realpath(input)
+        if (folderRoot && dirname(path) !== folderRoot) throw new Error('선택한 폴더 밖의 파일입니다.')
+      } catch (error) {
+        if (!rejected) throw error
+        rejected.push(basename(input)); continue
+      }
       if (candidates.has(path)) continue
       if (candidates.size >= 100) throw new Error('사진은 최대 100장까지 열 수 있습니다.')
-      const bytes = await readBounded(path, MAX_FILE_BYTES)
-      const dimensions = inspectImage(bytes, 'photo')
-      const thumbnail = this.thumbnail(bytes) // Decode one candidate at a time; retain only a small thumbnail.
-      const info: PhotoInfo = { id: randomUUID(), name: basename(path), ...dimensions, thumbnail }
-      candidates.set(path, { info, path, hash: createHash('sha256').update(bytes).digest('hex') })
+      try {
+        const bytes = await readBounded(path, MAX_FILE_BYTES)
+        const dimensions = inspectImage(bytes, 'photo')
+        const thumbnail = this.thumbnail(bytes) // Decode one candidate at a time; retain only a small thumbnail.
+        const info: PhotoInfo = { id: randomUUID(), name: basename(path), ...dimensions, thumbnail }
+        candidates.set(path, { info, path, hash: createHash('sha256').update(bytes).digest('hex') })
+      } catch (error) {
+        if (!rejected) throw error
+        rejected.push(basename(path))
+      }
     }
     this.records = new Map([...candidates.values()].map(item => [item.info.id, item]))
     return this.list()
+  }
+  async addFolder(directory: string): Promise<{ photos: PhotoInfo[]; rejected: string[] }> {
+    const root = await realpath(directory)
+    const paths: string[] = []
+    for await (const entry of await opendir(root)) {
+      if (!entry.isFile() || !['.jpg', '.jpeg', '.png'].includes(extname(entry.name).toLowerCase())) continue
+      paths.push(join(root, entry.name))
+      if (paths.length > 100) throw new Error('폴더에 사진이 100장보다 많습니다. 파일을 나누어 선택하세요.')
+    }
+    paths.sort((a, b) => basename(a).localeCompare(basename(b), 'ko', { numeric: true }))
+    const rejected: string[] = []
+    return { photos: await this.add(paths, rejected, root), rejected }
   }
   async read(id: string): Promise<ImageAsset> {
     const record = this.get(id)

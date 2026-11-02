@@ -15,7 +15,7 @@ describe('IPC 권한 경계', () => {
   it('경로·추가 필드·임의 객체·잘못된 타입을 거부한다', () => {
     const good = { photoId: '00000000-0000-0000-0000-000000000000', png: new Uint8Array([1]), output: DEFAULT_OUTPUT }
     expect(validSaveRequest(good)).toBe(true)
-    for (const bad of [null, undefined, [], {}, { ...good, path: '/tmp/file' }, { ...good, photoId: '../photo' }, { ...good, png: [1] }, { ...good, png: 'image' }, { ...good, output: { ...DEFAULT_OUTPUT, width: 0 } }, { ...good, output: null }]) {
+    for (const bad of [null, undefined, [], {}, { ...good, path: '/tmp/file' }, { ...good, photoId: '../photo' }, { ...good, png: [1] }, { ...good, png: 'image' }, { ...good, output: { ...DEFAULT_OUTPUT, landscapeSize: 0 } }, { ...good, output: null }]) {
       expect(validSaveRequest(bad)).toBe(false)
     }
   })

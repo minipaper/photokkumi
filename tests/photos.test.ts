@@ -29,3 +29,35 @@ it('사진 ID·중복·등록 원자성·원본 변경·개수 한도를 검증�
     store.clear(); expect(store.list()).toEqual([])
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
+
+it('폴더의 JPG/PNG를 이름순으로 가져오고 손상 파일·하위 폴더를 제외한다', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'photokkumi-folder-'))
+  try {
+    const fs = await import('node:fs/promises')
+    const png = PNG.sync.write(new PNG({ width: 40, height: 20 }))
+    await writeFile(join(dir, '2.PNG'), png); await writeFile(join(dir, '1.png'), png)
+    await writeFile(join(dir, 'bad.jpg'), 'invalid'); await writeFile(join(dir, 'notes.txt'), 'notes')
+    await fs.mkdir(join(dir, 'nested')); await writeFile(join(dir, 'nested', 'hidden.png'), png)
+    if (process.platform !== 'win32') await fs.symlink(join(dir, 'nested', 'hidden.png'), join(dir, 'link.png'))
+    const store = new PhotoStore(() => 'thumb')
+    const result = await store.addFolder(dir)
+    expect(result.photos.map(item => item.name)).toEqual(['1.png', '2.PNG'])
+    expect(result.rejected).toEqual(['bad.jpg'])
+    expect((await store.addFolder(dir)).photos).toHaveLength(2)
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
+it('100장 초과 폴더를 일부 등록하지 않고 기존 사진을 보존한다', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'photokkumi-folder-limit-'))
+  try {
+    const fs = await import('node:fs/promises')
+    const png = PNG.sync.write(new PNG({ width: 4, height: 4 }))
+    const original = join(dir, 'original.png'); await writeFile(original, png)
+    const folder = join(dir, 'overflow'); await fs.mkdir(folder)
+    await Promise.all(Array.from({ length: 101 }, (_, i) => writeFile(join(folder, `${i}.png`), png)))
+    const store = new PhotoStore(() => 'thumb')
+    const initial = await store.add([original])
+    await expect(store.addFolder(folder)).rejects.toThrow('100')
+    expect(store.list()).toEqual(initial)
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})

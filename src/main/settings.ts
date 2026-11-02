@@ -2,7 +2,7 @@ import fs from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { readBounded } from './library'
-import { DEFAULT_OUTPUT, validOutput, type OutputSettings } from '../shared/output'
+import { DEFAULT_OUTPUT, validOutput, upgradeOutput, type OutputSettings } from '../shared/output'
 export class OutputStore {
   private tail: Promise<unknown> = Promise.resolve()
   private path: string
@@ -12,12 +12,8 @@ export class OutputStore {
     try { bytes = await readBounded(this.path, 4096) }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { output: { ...DEFAULT_OUTPUT }, migrate: false }; throw error }
     const value = JSON.parse(bytes.toString('utf8')) as Record<string, unknown>
-    const legacy = value?.schemaVersion === 1
-    const candidate = value?.output as OutputSettings | undefined
-    const qualityValid = candidate && Number.isInteger(candidate.quality) && candidate.quality >= 1 && candidate.quality <= 100
-    if (!value || Object.keys(value).length !== 2 || ![1, 2].includes(value.schemaVersion as number) || !candidate
-      || !qualityValid || !validOutput(legacy ? { ...candidate, quality: 100 } : candidate)) throw new Error('출력 설정 파일이 손상되었습니다. 기존 파일은 보존합니다.')
-    return { output: { ...candidate, quality: 100 }, migrate: legacy }
+    if (!value || Object.keys(value).length !== 2) throw new Error('출력 설정 파일이 손상되었습니다. 기존 파일은 보존합니다.')
+    return { output: upgradeOutput(value.output, value.schemaVersion), migrate: value.schemaVersion !== 3 }
   }
   get(): Promise<OutputSettings> { return this.tail.then(async () => (await this.read()).output) }
 
@@ -30,7 +26,7 @@ export class OutputStore {
       const temporary = join(this.directory, `.settings-${randomUUID()}.tmp`)
       try {
         const handle = await fs.open(temporary, 'wx', 0o600)
-        try { await handle.writeFile(JSON.stringify({ schemaVersion: 2, output })); await handle.sync() }
+        try { await handle.writeFile(JSON.stringify({ schemaVersion: 3, output })); await handle.sync() }
         finally { await handle.close() }
         await fs.rename(temporary, this.path)
       } catch (error) { await fs.unlink(temporary).catch(() => undefined); throw error }

@@ -1,9 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, protocol, session } from 'electron'
 import { mkdirSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { readFile, realpath, stat } from 'node:fs/promises'
 import { basename, extname, join, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import type { ImageAsset, Result, SaveRequest } from '../shared/model'
+import type { ImageAsset, Result, SaveRequest, SaveReceipt } from '../shared/model'
+import { imageSize } from 'image-size'
+import { orientThumbnail } from '../shared/thumbnail'
 import { inspectImage, MAX_OUTPUT_BYTES } from './images'
 import { saveUnique, SaveCleanupError } from './files'
 import { trustedSender, validSaveRequest } from './security'
@@ -30,10 +32,14 @@ const photos = new PhotoStore(bytes => {
   const image = nativeImage.createFromBuffer(bytes)
   if (image.isEmpty()) throw new Error('이미지를 디코딩할 수 없습니다.')
   const size = image.getSize(), scale = Math.min(1, 120 / size.width, 120 / size.height)
-  return image.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)) }).toDataURL()
+  const small = image.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)) })
+  const dimensions = small.getSize()
+  const oriented = orientThumbnail(small.toBitmap(), dimensions.width, dimensions.height, imageSize(bytes).orientation ?? 1)
+  return nativeImage.createFromBitmap(Buffer.from(oriented.bytes), { width: oriented.width, height: oriented.height }).toDataURL()
 })
 const outputStore = new OutputStore(app.getPath('userData'))
 const photoReferences = new Map<string, string[]>()
+let outputDirectory: string | null = null
 let busy = false
 let settingsPending = 0
 let pendingClose: string | null = null
@@ -42,21 +48,26 @@ let quitRequested = false
 const developmentUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined
 const pageUrl = developmentUrl ? new URL(developmentUrl).href : 'app://bundle/index.html'
 
-async function chooseSticker(): Promise<ImageAsset | null> {
-  if (!win || !photos.list().length) throw new Error('사진을 먼저 열어주세요.')
-  const selected = await dialog.showOpenDialog(win, { title: 'PNG 스티커 등록', properties: ['openFile', 'multiSelections'], filters: [{ name: 'PNG', extensions: ['png'] }] })
-  if (selected.canceled || !selected.filePaths[0]) return null
-  const result = await library.importFiles(selected.filePaths)
-  const asset = result.stickers.find(item => item.id === result.importedIds[0])!
-  activeStickerIds.add(asset.id); permittedStickerIds.add(asset.id)
-  return { id: asset.id, name: asset.name, width: asset.width, height: asset.height, mime: 'image/png', bytes: await library.read(asset.id) }
-}
 async function choosePhotos() {
   const result = await dialog.showOpenDialog(win!, { title: '사진 열기', properties: ['openFile', 'multiSelections'], filters: [{ name: 'JPG / PNG', extensions: ['jpg', 'jpeg', 'png'] }] })
   return result.canceled || !result.filePaths.length ? null : photos.add(result.filePaths)
 }
 
-async function save(request: SaveRequest): Promise<string | null> {
+async function choosePhotoFolder() {
+  const selected = await dialog.showOpenDialog(win!, { title: '입력 폴더 선택', properties: ['openDirectory'] })
+  if (selected.canceled || !selected.filePaths[0]) return null
+  return photos.addFolder(selected.filePaths[0])
+}
+async function chooseOutputFolder(): Promise<string | null> {
+  const selected = await dialog.showOpenDialog(win!, { title: '출력 폴더 선택', properties: ['openDirectory', 'createDirectory'] })
+  if (selected.canceled || !selected.filePaths[0]) return null
+  const path = await realpath(selected.filePaths[0])
+  if (!(await stat(path)).isDirectory()) throw new Error('출력 폴더를 확인하세요.')
+  outputDirectory = path
+  return path
+}
+
+async function save(request: SaveRequest): Promise<SaveReceipt | null> {
   if (!validSaveRequest(request)) throw new Error('유효하지 않은 저장 요청입니다.')
   const record = photos.get(request.photoId), photo = record.info
   if (request.png.byteLength > MAX_OUTPUT_BYTES) throw new Error('저장 이미지가 너무 큽니다.')
@@ -74,9 +85,18 @@ async function save(request: SaveRequest): Promise<string | null> {
   // Re-encode decoded pixels; do not copy any incoming PNG/EXIF/GPS metadata.
   const encoded = request.output.format === 'jpg' ? decoded.toJPEG(request.output.quality) : decoded.toPNG()
   if (!encoded.length || encoded.length > MAX_OUTPUT_BYTES) throw new Error('저장 이미지가 너무 큽니다.')
-  const selected = await dialog.showOpenDialog(win!, { title: '결과를 저장할 폴더', properties: ['openDirectory', 'createDirectory'] })
-  if (selected.canceled || !selected.filePaths[0]) return null
-  try { return basename(await saveUnique(selected.filePaths[0], record.path, encoded, request.output.format === 'jpg' ? '.jpg' : '.png')) }
+  let directory = outputDirectory
+  if (!directory) {
+    const selected = await dialog.showOpenDialog(win!, { title: '결과를 저장할 폴더', properties: ['openDirectory', 'createDirectory'] })
+    if (selected.canceled || !selected.filePaths[0]) return null
+    directory = selected.filePaths[0]
+  }
+  try {
+    const target = await realpath(directory)
+    const name = basename(await saveUnique(target, record.path, encoded, request.output.format === 'jpg' ? '.jpg' : '.png'))
+    outputDirectory = target
+    return { name, folderLabel: target }
+  }
   catch (error) {
     if (error instanceof SaveCleanupError) throw error
     throw new Error('저장하지 못했습니다. 폴더 권한·여유 공간을 확인하세요. 편집 내용은 유지됩니다.', { cause: error })
@@ -101,7 +121,7 @@ function createWindow() {
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.webContents.on('will-navigate', event => event.preventDefault())
   win.webContents.on('will-attach-webview', event => event.preventDefault())
-  win.on('closed', () => { win = null; photos.clear(); photoReferences.clear(); pendingClose = null; activeStickerIds.clear(); permittedStickerIds.clear() })
+  win.on('closed', () => { win = null; outputDirectory = null; photos.clear(); photoReferences.clear(); pendingClose = null; activeStickerIds.clear(); permittedStickerIds.clear() })
   void win.loadURL(pageUrl)
 }
 
@@ -148,7 +168,7 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
   session.defaultSession.setPermissionCheckHandler(() => false)
   for (const [channel, action] of [
-    ['photo:choose', choosePhotos], ['sticker:choose', chooseSticker], ['photo:save', save], ['photo:read', (id: string) => photos.read(id)]
+    ['photo:choose', choosePhotos], ['photo:folder', choosePhotoFolder], ['output:folder', chooseOutputFolder], ['photo:save', save], ['photo:read', (id: string) => photos.read(id)]
   ] as const) {
     ipcMain.handle(channel, async (event, ...args: unknown[]): Promise<Result<unknown>> => {
       if (!win || !trustedSender(event.sender.id, win.webContents.id, event.senderFrame === win.webContents.mainFrame, event.senderFrame?.url ?? '', pageUrl)) {
@@ -159,7 +179,7 @@ app.whenReady().then(() => {
       if (channel === 'photo:save' && (args.length !== 1 || !validSaveRequest(args[0]))) return { ok: false, error: '유효하지 않은 저장 요청입니다.' }
       if (channel === 'photo:read' && (args.length !== 1 || !validAssetId(args[0]))) return { ok: false, error: '유효하지 않은 사진 요청입니다.' }
       busy = true
-      try { if (channel === 'sticker:choose') await loadedLibrary; return { ok: true, value: await (action as (value: unknown) => Promise<unknown>)(args[0]) } }
+      try { return { ok: true, value: await (action as (value: unknown) => Promise<unknown>)(args[0]) } }
       catch (error) { return { ok: false, error: error instanceof Error ? error.message : '작업에 실패했습니다.' } }
       finally { busy = false }
     })

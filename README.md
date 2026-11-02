@@ -29,7 +29,7 @@ npm run build
 npm start
 ```
 
-실제 결과: 단위/파일 I/O 21개, Playwright Electron E2E 9개 통과, 타입·lint·빌드 통과(macOS 26.3 arm64). E2E는 native 파일 대화상자의 선택 결과만 대체하고 실제 main/preload/renderer, Canvas 인코딩과 파일 저장을 사용합니다. 세부 결과는 [단계 A 안정화](./docs/stage-a-stabilization.md), [의존성 감사 분석](./docs/dependency-audit.md), [Windows 검증 절차](./docs/windows-validation.md)에 있습니다.
+실제 결과: 단위/파일 I/O 21개, Playwright Electron E2E 11개 통과(기본 9개 + 화면 배율 1·2 픽셀 회귀), 타입·lint·빌드 통과(macOS 26.3 arm64). E2E는 native 파일 대화상자의 선택 결과만 대체하고 실제 main/preload/renderer, Canvas 인코딩과 파일 저장을 사용합니다. 세부 결과는 [단계 A 안정화](./docs/stage-a-stabilization.md), [의존성 감사 분석](./docs/dependency-audit.md), [Windows 검증 절차](./docs/windows-validation.md)에 있습니다.
 
 Windows x64 NSIS 설정과 `npm run package:win` 스크립트는 준비했지만 **Windows 실행 및 설치/GUI 검증은 대기**입니다. 코드 서명·업데이트·릴리스 게시를 설정하지 않았습니다.
 

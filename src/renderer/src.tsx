@@ -36,7 +36,7 @@ function EditorCanvas({ photo, sticker, placement, disabled, onChange }: {
   return <div ref={area} className="canvas-area" data-testid="canvas-area">
     <div className="canvas-frame" data-testid="canvas-frame" data-scale={scale}>
       <Stage width={photo.width * scale} height={photo.height * scale} scaleX={scale} scaleY={scale}>
-        <Layer>
+        <Layer ref={layer => { layer?.getNativeCanvasElement().setAttribute('data-testid', 'photo-content') }}>
           <Group clipX={0} clipY={0} clipWidth={photo.width} clipHeight={photo.height}>
             <CanvasImage image={photo.bitmap} width={photo.width} height={photo.height} listening={false} />
             {sticker && placement && <CanvasImage ref={image} image={sticker.bitmap}
@@ -51,6 +51,8 @@ function EditorCanvas({ photo, sticker, placement, disabled, onChange }: {
                 onChange(next)
               }} />}
           </Group>
+        </Layer>
+        <Layer ref={layer => { layer?.getNativeCanvasElement().setAttribute('data-testid', 'editor-overlay') }}>
           {sticker && placement && <Transformer ref={transformer} enabledAnchors={['top-left', 'top-right', 'bottom-left', 'bottom-right']}
             keepRatio flipEnabled={false} rotateEnabled={!disabled} resizeEnabled={!disabled}
             boundBoxFunc={(oldBox, newBox) => Math.abs(newBox.width) < 4 || Math.abs(newBox.height) < 4 || Math.abs(newBox.width) > 32768 * scale || Math.abs(newBox.height) > 32768 * scale ? oldBox : newBox} />}

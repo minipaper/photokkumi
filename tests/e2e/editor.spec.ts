@@ -44,10 +44,13 @@ test.beforeEach(async () => {
   source = join(directory, '한글 사진.png'); stickerPath = join(directory, '투명 스티커.png')
   await writeFile(source, makePng(1200, 800, () => [20, 40, 200, 255]))
   await writeFile(stickerPath, makePng(80, 40, (x, y) => y >= 30 ? [0, 0, 0, 0] : x < 40 ? [255, 0, 0, 255] : [0, 255, 0, 255]))
-  app = await electron.launch({ args: [resolve('out/main/index.js'), `--user-data-dir=${join(directory, 'profile')}`], env: { ...process.env, ELECTRON_RENDERER_URL: '' } })
+  const factor = test.info().project.metadata.deviceScaleFactor
+  const scaleArgs = typeof factor === 'number' ? [`--force-device-scale-factor=${factor}`] : []
+  app = await electron.launch({ args: [resolve('out/main/index.js'), `--user-data-dir=${join(directory, 'profile')}`, ...scaleArgs], env: { ...process.env, ELECTRON_RENDERER_URL: '' } })
   page = await app.firstWindow()
   page.on('pageerror', error => errors.push(error.message))
   await expect(page.getByRole('heading', { name: '포토꾸미', exact: true })).toBeVisible()
+  if (typeof factor === 'number') expect(await page.evaluate(() => window.devicePixelRatio)).toBe(factor)
   await app.context().setOffline(true)
 })
 test.afterEach(async () => {
@@ -88,12 +91,15 @@ test('실제 마우스 이동·비율 유지 크기·회전 핸들, 원본 좌�
   expect(Math.abs(await value('회전'))).toBeGreaterThan(40)
 
   await field('중심 X', 400); await field('중심 Y', 300); await field('스티커 너비', 160); await field('회전', 90)
-  // Compare interior preview pixels in display coordinates with full-resolution output.
-  const samples = [[420, 270], [420, 330], [370, 300], [20, 20]]
-  const preview = await page.locator('canvas').first().evaluate((canvas, points) => {
-    const ctx = (canvas as HTMLCanvasElement).getContext('2d')!
-    const ratio = (canvas as HTMLCanvasElement).width / 1200
-    return points.map(([x, y]) => [...ctx.getImageData(Math.floor(x * ratio), Math.floor(y * ratio), 1, 1).data])
+  // Read only the photo/sticker layer, excluding Transformer UI. Include a border
+  // location so sampling the overlay again cannot silently pass this regression.
+  const samples = [[420, 270], [420, 330], [370, 300], [20, 20], [360, 300]]
+  const readPreview = () => page.getByTestId('photo-content').evaluate((element, points) => {
+    const canvas = element as HTMLCanvasElement
+    const ctx = canvas.getContext('2d')!
+    const ratioX = canvas.width / 1200
+    const ratioY = canvas.height / 800
+    return points.map(([x, y]) => [...ctx.getImageData(Math.floor(x * ratioX), Math.floor(y * ratioY), 1, 1).data])
   }, samples)
   await save()
   const image = await output()
@@ -101,7 +107,9 @@ test('실제 마우스 이동·비율 유지 크기·회전 핸들, 원본 좌�
   expect(pixel(image, 420, 270)).toEqual([255, 0, 0, 255])
   expect(pixel(image, 420, 330)).toEqual([0, 255, 0, 255])
   expect(pixel(image, 370, 300)).toEqual([20, 40, 200, 255])
-  expect(samples.map(([x, y]) => pixel(image, x, y))).toEqual(preview)
+  expect(pixel(image, 360, 300)).toEqual([20, 40, 200, 255])
+  // Input action completion does not mean Konva's next animation frame has painted.
+  await expect.poll(readPreview).toEqual(samples.map(([x, y]) => pixel(image, x, y)))
   expect(hash(await readFile(source))).toBe(original)
   expect(hash(await readFile(stickerPath))).toBe(stickerHash)
   await page.screenshot({ path: 'test-results/stage-a-editor.png' })

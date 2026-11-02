@@ -57,6 +57,6 @@ export function LibraryPanel(props: Props) {
       <button disabled={props.disabled} onClick={async () => { if (await props.onDelete(deleting.id)) setDeleting(null) }}>삭제 확인</button>
       <button disabled={props.disabled} onClick={() => setDeleting(null)}>삭제 취소</button>
     </div>}
-    <small>스티커를 누를 때마다 사진에 추가합니다. 배치·실행취소 이력에서 사용 중인 파일은 삭제할 수 없습니다.</small>
+    <small>스티커를 누를 때마다 사진에 추가합니다. 모든 사진의 배치·실행취소 이력·마지막 저장 상태에서 사용 중인 파일은 삭제할 수 없습니다.</small>
   </section>
 }

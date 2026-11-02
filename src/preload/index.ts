@@ -22,7 +22,8 @@ const api: PhotoApi = {
   deleteSticker: id => ipcRenderer.invoke('library:delete', id),
   backupLibrary: () => ipcRenderer.invoke('library:backup'),
   restoreLibrary: () => ipcRenderer.invoke('library:restore'),
-  choosePhoto: () => ipcRenderer.invoke('photo:choose'),
+  choosePhotos: () => ipcRenderer.invoke('photo:choose'),
+  readPhoto: id => ipcRenderer.invoke('photo:read', id),
   chooseSticker: () => ipcRenderer.invoke('sticker:choose'),
   savePng: (request) => ipcRenderer.invoke('photo:save', request)
 }

@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { ImageAsset, PhotoApi, Placement } from '../shared/model'
+import type { ImageAsset, PhotoApi, PhotoInfo, Placement } from '../shared/model'
 import { validPlacement } from '../shared/model'
 import type { LibrarySticker, StickerMetadata } from '../shared/library'
 import { LibraryPanel } from './LibraryPanel'
 import { EditorCanvas } from './EditorCanvas'
-import { addInstance, updateSelected, removeSelected, duplicateSelected, reorderSelected, emptyHistory, commitScene, undoScene, redoScene, referencedAssets, MAX_INSTANCES, MAX_DECODED_STICKER_PIXELS, type Scene, type SceneHistory } from '../shared/scene'
+import { addInstance, updateSelected, removeSelected, duplicateSelected, reorderSelected, emptyHistory, commitScene, undoScene, redoScene, MAX_INSTANCES, MAX_DECODED_STICKER_PIXELS, type Scene, type SceneHistory } from '../shared/scene'
+import { createPhotoSession, editPhotoSession, savePhotoSession, discardPhotoSession, sessionAssets, type PhotoSession } from '../shared/photo-session'
 import { composePng } from './export'
 import './style.css'
 
@@ -20,6 +21,11 @@ async function decode(asset: ImageAsset): Promise<DecodedAsset> {
   return { id: asset.id, name: asset.name, width: asset.width, height: asset.height, mime: asset.mime, bitmap }
 }
 function App() {
+  const [photos, setPhotos] = useState<PhotoInfo[]>([])
+  const sessions = useRef(new Map<string, PhotoSession>())
+  const activeId = useRef<string | null>(null)
+  const [pendingPhoto, setPendingPhoto] = useState<string | null>(null)
+  const switchDialog = useRef<HTMLDialogElement>(null)
   const [photo, setPhoto] = useState<DecodedAsset | null>(null)
   const [history, setHistory] = useState<SceneHistory>(emptyHistory)
   const currentHistory = useRef(history)
@@ -27,10 +33,12 @@ function App() {
   const scene = history.present
   const placement = scene.stickers.find(item => item.id === scene.selectedId) ?? null
   const sticker = placement ? assets.current.get(placement.assetId) : null
-  const referencedIds = referencedAssets(history)
+  const activeSession = photo ? sessions.current.get(photo.id) : undefined
+  const referencedAssetsForCurrent = activeSession ? sessionAssets(activeSession) : []
+  const referencedIds = [...new Set([...sessions.current.values()].flatMap(sessionAssets))]
   const [busy, setBusy] = useState(false)
   const operation = useRef(false)
-  const [status, setStatus] = useState('사진 한 장을 열어 시작하세요.')
+  const [status, setStatus] = useState('사진을 열어 시작하세요.')
   const [error, setError] = useState('')
   const [libraryItems, setLibraryItems] = useState<LibrarySticker[]>([])
   const [dirty, setDirty] = useState(false)
@@ -39,6 +47,7 @@ function App() {
   useEffect(() => window.photokkumi.onCloseRequested(setCloseRequest), [])
   useEffect(() => {
     if (!closeRequest || busy) return
+    switchDialog.current?.close(); setPendingPhoto(null)
     if (!dirty) {
       void window.photokkumi.resolveClose({ requestId: closeRequest, action: 'close' }).then(result => {
         if (!result.ok) setError(result.error)
@@ -47,27 +56,31 @@ function App() {
   }, [closeRequest, busy, dirty])
   useEffect(() => () => photo?.bitmap.close(), [photo])
   useEffect(() => {
-    const keep = new Set(referencedAssets(history))
+    const keep = new Set([...sessions.current.values()].flatMap(sessionAssets))
     for (const [id, asset] of assets.current) if (!keep.has(id)) { asset.bitmap.close(); assets.current.delete(id) }
-  }, [history])
+  }, [history, photo, dirty])
   useEffect(() => {
     const cache = assets.current
     return () => { for (const asset of cache.values()) asset.bitmap.close(); cache.clear() }
   }, [])
-  async function syncReferences(next: SceneHistory) {
-    if (!photo) return
-    const result = await window.photokkumi.setStickerReferences(photo.id, referencedAssets(next))
+  async function syncReferences(id = activeId.current) {
+    if (!id) return
+    const session = sessions.current.get(id)!
+    const result = await window.photokkumi.setStickerReferences(id, sessionAssets(session))
     if (!result.ok) throw new Error(result.error)
   }
   function applyHistory(next: SceneHistory) {
+    if (!activeId.current) return
+    sessions.current.set(activeId.current, editPhotoSession(sessions.current.get(activeId.current)!, next))
     currentHistory.current = next; setHistory(next)
     setDirty(true); setStatus('수정됨 · 저장이 필요합니다.')
-    void syncReferences(next).catch(value => setError(String(value)))
+    void syncReferences().catch(value => setError(String(value)))
   }
   function editScene(next: Scene) { applyHistory(commitScene(currentHistory.current, next)) }
   function selectInstance(id: string | null) {
     if (operation.current || currentHistory.current.present.selectedId === id) return
     const next = { ...currentHistory.current, present: { ...currentHistory.current.present, selectedId: id } }
+    if (activeId.current) sessions.current.get(activeId.current)!.history = next
     currentHistory.current = next; setHistory(next)
   }
 
@@ -129,7 +142,7 @@ function App() {
         width, height: width * decoded.height / decoded.width, rotation: 0, zOrder: 0
       }))
       setStatus('스티커를 추가했습니다. 클릭해 선택하고 각각 이동·크기·회전을 조절하세요.')
-    } finally { await syncReferences(currentHistory.current) }
+    } finally { await syncReferences() }
   }
   const useSticker = (id: string) => run(async () => {
     const cached = assets.current.get(id)
@@ -146,7 +159,7 @@ function App() {
   function handleEditorKey(event: KeyboardEvent<HTMLElement>) {
     const target = event.target
     if (event.defaultPrevented || event.nativeEvent.isComposing || event.altKey || event.ctrlKey || event.metaKey
-      || operation.current || closeRequest || (target instanceof HTMLElement
+      || operation.current || closeRequest || pendingPhoto || (target instanceof HTMLElement
         && (target.isContentEditable || target.closest('input, textarea, select, dialog, [role="textbox"]')))) return
     const current = currentHistory.current.present
     const selected = current.stickers.find(item => item.id === current.selectedId)
@@ -171,13 +184,45 @@ function App() {
     const next = emptyHistory()
     applyHistory(next)
   }
+  async function activatePhoto(id: string, discard = false) {
+    if (activeId.current === id) return
+    const result = await window.photokkumi.readPhoto(id)
+    if (!result.ok) throw new Error(result.error)
+    const decoded = await decode(result.value)
+    // Commit the switch only after a complete decode. A failed target keeps the current scene intact.
+    if (discard && activeId.current) {
+      const previous = activeId.current
+      const original = sessions.current.get(previous)!
+      sessions.current.set(previous, discardPhotoSession(original))
+      try { await syncReferences(previous) }
+      catch (error) { sessions.current.set(previous, original); decoded.bitmap.close(); throw error }
+    }
+    const session = sessions.current.get(id)!
+    activeId.current = id
+    currentHistory.current = session.history; setHistory(session.history)
+    setPhoto(decoded); setDirty(session.dirty)
+    setStatus(`${decoded.name} · 편집 중`)
+  }
   const choosePhoto = () => run(async () => {
-    const result = await window.photokkumi.choosePhoto()
+    const result = await window.photokkumi.choosePhotos()
     if (!result.ok) throw new Error(result.error)
     if (!result.value) return
-    const decoded = await decode(result.value)
-    setPhoto(decoded); currentHistory.current = emptyHistory(); setHistory(currentHistory.current); setDirty(false)
-    setStatus('라이브러리의 스티커를 클릭해 배치하세요.')
+    for (const item of result.value) if (!sessions.current.has(item.id)) sessions.current.set(item.id, createPhotoSession())
+    setPhotos(result.value)
+    if (!activeId.current && result.value[0]) await activatePhoto(result.value[0].id)
+    setStatus('사진을 추가했습니다. 라이브러리의 스티커를 클릭해 배치하세요.')
+  })
+  const requestPhoto = (id: string) => {
+    if (operation.current || pendingPhoto || closeRequest || id === activeId.current) return
+    if (dirty) { setPendingPhoto(id); switchDialog.current?.showModal() }
+    else void run(() => activatePhoto(id))
+  }
+  const cancelSwitch = () => { switchDialog.current?.close(); setPendingPhoto(null) }
+  const resolveSwitch = (action: 'save' | 'discard') => run(async () => {
+    if (!pendingPhoto) return
+    if (action === 'save' && !await saveCurrent()) { cancelSwitch(); return }
+    await activatePhoto(pendingPhoto, action === 'discard')
+    cancelSwitch()
   })
   const chooseSticker = () => run(async () => {
     if (!photo) return
@@ -193,10 +238,21 @@ function App() {
     const result = await window.photokkumi.savePng({ photoId: photo.id, png })
     if (!result.ok) throw new Error(result.error)
     if (!result.value) { setStatus('저장이 취소되었습니다. 편집 내용은 유지됩니다.'); return false }
+    sessions.current.set(photo.id, savePhotoSession(sessions.current.get(photo.id)!))
     setDirty(false); setStatus(`저장 완료 · ${result.value}`)
+    await syncReferences(photo.id)
     return true
   }
   const save = () => run(async () => { await saveCurrent() })
+  const photoIndex = photos.findIndex(item => item.id === photo?.id)
+  const saveNext = () => run(async () => {
+    if (!photo) return
+    const session = sessions.current.get(photo.id)!
+    if ((session.dirty || !session.saved) && !await saveCurrent()) return
+    const next = photos[photoIndex + 1]
+    if (next) await activatePhoto(next.id)
+    else setStatus('마지막 사진까지 저장했습니다. 작업이 완료되었습니다.')
+  })
   async function resolveClose(action: 'close' | 'cancel') {
     if (!closeRequest) return
     const requestId = closeRequest
@@ -216,6 +272,16 @@ function App() {
     }
   })
   return <main onKeyDown={handleEditorKey}>
+    <dialog ref={switchDialog} aria-labelledby="switch-title" onCancel={event => { event.preventDefault(); if (!busy) cancelSwitch() }}>
+      <h2 id="switch-title">사진을 바꾸기 전 저장</h2>
+      <p>현재 사진의 수정 내용을 저장할까요? 버리기를 선택하면 마지막 저장 상태로 돌아갑니다.</p>
+      <div className="close-actions">
+        <button disabled={busy} onClick={() => resolveSwitch('save')}>저장</button>
+        <button disabled={busy} onClick={() => resolveSwitch('discard')}>버리기</button>
+        <button disabled={busy} autoFocus onClick={cancelSwitch}>취소</button>
+      </div>
+      {error && <p role="alert">{error}</p>}
+    </dialog>
     <dialog ref={closeDialog} aria-labelledby="close-title" onCancel={event => { event.preventDefault(); if (!busy) cancelClose() }}>
       <h2 id="close-title">저장하지 않은 편집</h2>
       <p>편집한 사진을 저장하고 닫을까요?</p>
@@ -225,15 +291,31 @@ function App() {
         <button disabled={busy} autoFocus onClick={cancelClose}>취소</button>
       </div>
     </dialog>
-    <header><div><h1>포토꾸미</h1><p>사진 한 장에 여러 PNG 스티커</p></div><span className="badge">한 장 편집</span></header>
+    <header><div><h1>포토꾸미</h1><p>사진마다 스티커를 배치하고 저장하세요</p></div><span className="badge">{photo ? `${photoIndex + 1} / ${photos.length}` : '사진 편집'}</span></header>
     <nav aria-label="파일 작업">
-      <button onClick={choosePhoto} disabled={busy || !!photo}>사진 열기</button>
+      <button onClick={choosePhoto} disabled={busy || !!pendingPhoto}>사진 열기</button>
       <button onClick={chooseSticker} disabled={busy || !photo}>PNG 스티커 열기</button>
+      <button onClick={saveNext} disabled={busy || !photo}>저장하고 다음</button>
       <button className="primary" onClick={save} disabled={busy || !photo}>{busy ? '처리 중…' : 'PNG로 저장'}</button>
     </nav>
     <section className="workspace">
-      {photo ? <EditorCanvas photo={photo} assets={assets.current} scene={scene} disabled={busy} onSelect={selectInstance} onChange={(id, value) => change(value, id)} />
-        : <div className="empty">사진을 열면 이곳에서 편집할 수 있습니다.<small>사진 JPG/PNG · 스티커 PNG · 결과는 원본 크기 PNG</small></div>}
+      {!!photos.length && <section className="photo-list" aria-label="사진 목록">
+        <h2>사진 {photoIndex + 1} / {photos.length}</h2>
+        <div className="photo-navigation">
+          <button disabled={busy || photoIndex <= 0} onClick={() => requestPhoto(photos[photoIndex - 1].id)}>이전 사진</button>
+          <button disabled={busy || photoIndex >= photos.length - 1} onClick={() => requestPhoto(photos[photoIndex + 1].id)}>다음 사진</button>
+        </div>
+        {photos.map((item, index) => {
+          const session = sessions.current.get(item.id)!
+          return <button key={item.id} className="photo-item" disabled={busy} aria-label={`사진 ${index + 1}: ${item.name}`} aria-pressed={photo?.id === item.id} onClick={() => requestPhoto(item.id)}>
+            <img src={item.thumbnail} alt="" width="80" height="60" loading="lazy" />
+            <span>{index + 1}. {item.name}</span>
+            <small>{session.dirty ? (session.saved ? '저장 후 수정' : '수정됨') : session.saved ? '저장 완료' : '미작업'}</small>
+          </button>
+        })}
+      </section>}
+      {photo ? <EditorCanvas key={photo.id} photo={photo} assets={assets.current} scene={scene} disabled={busy} onSelect={selectInstance} onChange={(id, value) => change(value, id)} />
+        : <div className="empty">사진을 열면 이곳에서 편집할 수 있습니다.<small>사진 여러 장 JPG/PNG · 스티커 PNG · 결과는 원본 크기 PNG</small></div>}
       <aside>
         <LibraryPanel items={libraryItems} disabled={busy} canUse={!!photo} activeIds={referencedIds}
           onUse={useSticker} onImport={importStickers} onBackup={backupLibrary} onRestore={restoreLibrary}
@@ -242,7 +324,7 @@ function App() {
         <div className="instance-tools">
           <button disabled={busy || !history.past.length} onClick={() => applyHistory(undoScene(currentHistory.current))}>실행 취소</button>
           <button disabled={busy || !history.future.length} onClick={() => applyHistory(redoScene(currentHistory.current))}>다시 실행</button>
-          <button disabled={busy || !referencedIds.length} onClick={clearScene}>배치·이력 비우기</button>
+          <button disabled={busy || !referencedAssetsForCurrent.length} onClick={clearScene}>배치·이력 비우기</button>
         </div>
         <div className="instance-list" aria-label="사진의 스티커 목록">
           {scene.stickers.map((item, index) => <button key={item.id} disabled={busy}
@@ -267,7 +349,7 @@ function App() {
         {sticker && <p className="file-info">스티커: {sticker.name}</p>}
       </aside>
     </section>
-    <footer><p role="status" aria-live="polite">{status}</p>{error && <p role="alert">{error}</p>}<small>원본은 바꾸지 않습니다. 새 PNG 파일로 저장합니다. 다른 사진 작업은 앱을 다시 열어 시작하세요.</small></footer>
+    <footer><p role="status" aria-live="polite">{status}</p>{error && <p role="alert">{error}</p>}<small>원본은 바꾸지 않습니다. 새 PNG 파일로 저장합니다. 사진별 편집은 앱을 닫으면 사라집니다. 저장한 PNG와 스티커 라이브러리는 유지됩니다.</small></footer>
   </main>
 }
 createRoot(document.getElementById('root')!).render(<App />)

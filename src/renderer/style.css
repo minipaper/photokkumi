@@ -38,3 +38,12 @@ aside { width: 300px; flex-shrink: 0; }
 .instance-list { display: flex; flex-direction: column; gap: 4px; max-height: 130px; overflow-y: auto; }
 .instance-list button { text-align: left; }
 .instance-list button[aria-pressed=true] { border-color: #6047cb; background: #eee9ff; }
+.photo-list { width: 190px; flex-shrink: 0; padding: 14px; border-right: 1px solid #dce0e8; overflow-y: auto; }
+.photo-list h2 { margin-bottom: 10px; }
+.photo-navigation { display: flex; gap: 4px; margin-bottom: 12px; }
+.photo-navigation button { padding: 7px 5px; font-size: 12px; flex: 1; }
+.photo-item { display: flex; flex-direction: column; align-items: center; width: 100%; padding: 8px; gap: 4px; margin-bottom: 8px; }
+.photo-item img { object-fit: contain; }
+.photo-item span { font-size: 12px; overflow-wrap: anywhere; }
+.photo-item[aria-pressed=true] { border-color: #6047cb; background: #f2efff; }
+.canvas-area:focus-visible { outline: 3px solid #a898ee; outline-offset: -3px; }

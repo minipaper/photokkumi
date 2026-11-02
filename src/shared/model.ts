@@ -8,6 +8,7 @@ export interface ImageAsset {
   mime: 'image/png' | 'image/jpeg'
   bytes: Uint8Array
 }
+export interface PhotoInfo extends Omit<ImageAsset, 'bytes'> { thumbnail: string }
 export interface Placement {
   x: number
   y: number
@@ -30,7 +31,8 @@ export interface PhotoApi {
   deleteSticker(id: string): Promise<Result<LibrarySticker[]>>
   backupLibrary(): Promise<Result<string | null>>
   restoreLibrary(): Promise<Result<LibrarySticker[] | null>>
-  choosePhoto(): Promise<Result<ImageAsset | null>>
+  choosePhotos(): Promise<Result<PhotoInfo[] | null>>
+  readPhoto(id: string): Promise<Result<ImageAsset>>
   chooseSticker(): Promise<Result<ImageAsset | null>>
   savePng(request: SaveRequest): Promise<Result<string | null>>
 }

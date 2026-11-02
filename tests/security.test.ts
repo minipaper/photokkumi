@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { DEFAULT_OUTPUT } from '../src/shared/output'
 import { trustedSender, validSaveRequest } from '../src/main/security'
 
 describe('IPC 권한 경계', () => {
@@ -12,9 +13,9 @@ describe('IPC 권한 경계', () => {
     }
   })
   it('경로·추가 필드·임의 객체·잘못된 타입을 거부한다', () => {
-    const good = { photoId: '00000000-0000-0000-0000-000000000000', png: new Uint8Array([1]) }
+    const good = { photoId: '00000000-0000-0000-0000-000000000000', png: new Uint8Array([1]), output: DEFAULT_OUTPUT }
     expect(validSaveRequest(good)).toBe(true)
-    for (const bad of [null, undefined, [], {}, { ...good, path: '/tmp/file' }, { ...good, photoId: '../photo' }, { ...good, png: [1] }, { ...good, png: 'image' }]) {
+    for (const bad of [null, undefined, [], {}, { ...good, path: '/tmp/file' }, { ...good, photoId: '../photo' }, { ...good, png: [1] }, { ...good, png: 'image' }, { ...good, output: { ...DEFAULT_OUTPUT, width: 0 } }, { ...good, output: null }]) {
       expect(validSaveRequest(bad)).toBe(false)
     }
   })

@@ -25,6 +25,8 @@ const api: PhotoApi = {
   choosePhotos: () => ipcRenderer.invoke('photo:choose'),
   readPhoto: id => ipcRenderer.invoke('photo:read', id),
   chooseSticker: () => ipcRenderer.invoke('sticker:choose'),
-  savePng: (request) => ipcRenderer.invoke('photo:save', request)
+  getOutputSettings: () => ipcRenderer.invoke('output:get'),
+  updateOutputSettings: output => ipcRenderer.invoke('output:update', output),
+  saveImage: (request) => ipcRenderer.invoke('photo:save', request)
 }
 contextBridge.exposeInMainWorld('photokkumi', api)

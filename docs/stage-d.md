@@ -1,0 +1,38 @@
+# 단계 D — 출력 크기·JPG/PNG·오류 경로
+
+범위: 원본/너비 지정 리사이즈·확대 방지, JPG 품질 1~100(기본 90)·PNG, JPG 흰 배경, 공통 출력 설정 재실행 유지, 최종 파일 decode/메타데이터/좌표/충돌/실패 회귀. 단계 E Windows 패키징·설치 검증은 포함하지 않는다.
+
+계획: 공통 출력 계산과 런타임 검증/설정 저장소 테스트 실패 재현 → 원본 좌표 기반 출력 Canvas와 main 인코딩 → 출력 UI와 저장 상태 연결 → 픽셀·EXIF·투명도·충돌·쓰기 실패 자동 검증. 기존 단계 C는 62b10b6으로 커밋·푸시 완료, 시작 시 작업 트리는 깨끗했다.
+
+공식 문서: [Electron nativeImage](https://www.electronjs.org/docs/latest/api/native-image), [Canvas smoothing](https://developer.mozilla.org/en-US/docs/Web/API/CanvasRenderingContext2D/imageSmoothingQuality). 기존 의존성으로 구현하며 신규 네이티브 모듈은 도입하지 않는다.
+
+## 구현 결정
+
+- 기본값: PNG·원본 크기(width=null)·확대 방지 켜짐·JPG 품질 90. 너비는 1~8192의 유한한 정수이며 높이는 `max(1, round(원본높이 × 출력너비 / 원본너비))`다. 확대 방지는 원본 너비를 상한으로 적용한다. 출력도 1,600만 픽셀·한 변 8,192px·80 MiB로 제한한다.
+- 화면 fit 크기로 캡처하지 않는다. 출력 크기 Canvas를 만들고 원본→출력의 x/y 비율(높이 정수 반올림 포함)로 좌표계를 변환한 뒤 사진·회전된 모든 스티커를 z-order대로 그린다. `imageSmoothingEnabled=true`, `imageSmoothingQuality='high'`를 사용한다. clipping은 출력 Canvas 경계에서 적용한다.
+- PNG에서는 알파를 유지한다. JPG는 Canvas에 흰색을 먼저 채우고 투명 사진·반투명 스티커를 합성한다. 중간 IPC 이미지는 PNG이며 main은 실제 decode 크기와 설정에서 계산한 크기를 대조한다. JPG 요청에 투명 픽셀이 남으면 거부한다. 최종은 `nativeImage.toPNG()` 또는 `toJPEG(quality)`로 재인코딩해 원본 EXIF/GPS/프로젝트 데이터를 복사하지 않는다.
+- JPG 품질 UI 1~100 정수를 Electron 인코더의 0~100 범위에 그대로 전달한다. Canvas JPEG 품질(0~1) 변환은 사용하지 않는다. PNG 선택 시 품질 입력을 비활성화한다. 실제 픽셀은 JPEG 손실 오차를 허용해 검사한다.
+- `savePng`를 기능 단위 `saveImage({photoId, png, output})`로 교체했다. sender/frame/정확한 인자 수·출력 설정 키/범위·허용 사진 ID·파일/해상도·실제 형식을 검사한다. JPEG 출력에도 기존 임시 파일/fsync·독점 생성·충돌 suffix·원본 보호·실패 정리 경로를 사용한다.
+- 설정은 userData/settings.json(schemaVersion=1, output)에 저장한다. 4 KiB 이하의 알려진 schema/키만 받는다. 설정 작업을 직렬화하고 임시 파일 write/sync/close→rename 후 성공으로 간주한다. 쓰기 실패 시 이전 파일을 유지하며 손상 파일을 기본값으로 덮지 않는다. 유효한 값만 자동 저장하고 이미지 저장 직전에도 저장 성공을 확인한다. 설정 쓰기 실패 시 이미지 저장·다음 이동을 막고 편집을 보존하지만 버리기 종료는 가능하다.
+- 사진별 마지막 저장의 출력 설정 키를 보관한다. 설정이 다르면 `출력 설정 변경`으로 표시하며 저장하고 다음에서도 재저장한다. PNG에서는 JPG 품질만 바꿔도 완료 상태가 바뀌지 않는다. 출력 옵션은 공통 환경설정으로 스티커 undo/redo·버리기와 분리한다. 출력 폴더는 기존대로 매 저장 시 선택한다.
+- 원본 사진 decode/EXIF 적용·스티커 bitmap 캐시와 기존 제한을 유지한다. Canvas는 인코딩 후 크기를 0으로 만들어 해제한다. 신규 의존성·네이티브 모듈·외부 업로드·배포 설정은 추가하지 않았다.
+
+## 실제 검증
+
+환경: macOS 26.3 arm64, 프로젝트 고정 Node 24.22.2 / Electron 45.2.1. 직접 생성한 fixture와 별도 임시 프로필을 사용하며 Electron 네트워크를 offline으로 설정했다.
+
+먼저 출력 계산·설정 저장소 모듈이 없는 테스트 실패를 확인했다. 이후 너비/반올림/확대 방지/유효성/출력 픽셀 한도, 설정 재실행·직렬화·rename 실패·손상 파일 보존, IPC 설정 검증을 확인했다. 반복 저장 중 이전 완료 메시지를 완료 대기로 오인하는 테스트를 통해 저장 시작 시 상태를 `저장 중`으로 전환했다.
+
+| 실행 명령 | 결과 |
+| --- | --- |
+| `npm test` | 9개 파일, 44개 테스트 통과 |
+| `npm run test:e2e` | 기존 17 + 출력/설정 3 = 20개 통과(23.5초) |
+| `npm run typecheck`, `npm run lint` | 통과 |
+| `npm run build` | E2E 사전 빌드 main/preload/renderer 통과 |
+| `git diff --check` | 통과 |
+
+새 E2E는 축소/확대 PNG의 실제 decode 크기·회전 스티커 픽셀, 잘못된 입력/과도한 픽셀 거부, 크기가 설정과 다른 IPC 거부, 투명 PNG 알파·반투명 스티커, JPG 흰 배경·품질별 다른 출력·기존 출력/원본 보존, 투명 JPG 중간 이미지 거부, 출력 설정 변경 후 저장하고 다음·취소/실패, 설정 재시작 유지·쓰기 실패 후 기존 파일 보존과 버리기 종료를 검증했다. EXIF 회전 fixture는 축소 JPG도 다시 decode해 방향·크기와 EXIF 제거를 확인했다. 기존 원본 SHA-256·겹침/잘림·배율1/2·저장 실패·파일 경합·라이브러리/ZIP·다중 사진·미저장 종료 회귀도 통과했다.
+
+## 미검증과 제한
+
+Windows C·D 자동/수동 및 NSIS 패키징은 사용자가 추후 모아서 확인할 예정이며 아직 검증하지 않았다. 실제 exFAT/FAT·권한 거부·Windows 대소문자/긴 경로·백신 잠금·DPI, 한도 근처 대형 사진의 장시간 메모리는 대기다. 확대 시 원본보다 더 많은 세부 정보가 생기는 것은 아니며 Canvas 보간/색상은 플랫폼에 따라 미세하게 다를 수 있다. JPEG는 손실 압축이며 전문 색상 프로파일/인쇄 품질은 범위 밖이다. 큰 출력은 현재 bitmap·Canvas·중간 PNG·nativeImage의 메모리가 겹쳐 수백 MiB를 사용할 수 있다.

@@ -8,6 +8,8 @@ import { inspectImage, MAX_OUTPUT_BYTES } from './images'
 import { saveUnique, SaveCleanupError } from './files'
 import { trustedSender, validSaveRequest } from './security'
 import { StickerLibrary, readBounded } from './library'
+import { OutputStore } from './settings'
+import { outputSize, validOutput } from '../shared/output'
 import { PhotoStore } from './photos'
 import { MAX_BACKUP_BYTES, validAssetId, validMetadata } from '../shared/library'
 
@@ -30,8 +32,10 @@ const photos = new PhotoStore(bytes => {
   const size = image.getSize(), scale = Math.min(1, 120 / size.width, 120 / size.height)
   return image.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)) }).toDataURL()
 })
+const outputStore = new OutputStore(app.getPath('userData'))
 const photoReferences = new Map<string, string[]>()
 let busy = false
+let settingsPending = 0
 let pendingClose: string | null = null
 let allowClose = false
 let quitRequested = false
@@ -57,13 +61,22 @@ async function save(request: SaveRequest): Promise<string | null> {
   const record = photos.get(request.photoId), photo = record.info
   if (request.png.byteLength > MAX_OUTPUT_BYTES) throw new Error('저장 이미지가 너무 큽니다.')
   const info = inspectImage(request.png, 'photo', true)
-  if (info.width !== photo.width || info.height !== photo.height) throw new Error('출력 크기가 원본과 다릅니다.')
+  const expected = outputSize(photo.width, photo.height, request.output)
+  if (info.width !== expected.width || info.height !== expected.height) throw new Error('출력 크기가 설정과 다릅니다.')
   const decoded = nativeImage.createFromBuffer(Buffer.from(request.png))
   if (decoded.isEmpty()) throw new Error('저장 이미지가 손상되었습니다.')
-  const png = decoded.toPNG() // Re-encode only decoded pixels, never copy source metadata.
+  const size = decoded.getSize()
+  if (size.width !== expected.width || size.height !== expected.height) throw new Error('출력 이미지 크기를 확인할 수 없습니다.')
+  if (request.output.format === 'jpg') {
+    const pixels = decoded.toBitmap()
+    for (let i = 3; i < pixels.length; i += 4) if (pixels[i] !== 255) throw new Error('JPG는 흰색 배경에 합성해야 합니다.')
+  }
+  // Re-encode decoded pixels; do not copy any incoming PNG/EXIF/GPS metadata.
+  const encoded = request.output.format === 'jpg' ? decoded.toJPEG(request.output.quality) : decoded.toPNG()
+  if (!encoded.length || encoded.length > MAX_OUTPUT_BYTES) throw new Error('저장 이미지가 너무 큽니다.')
   const selected = await dialog.showOpenDialog(win!, { title: '결과를 저장할 폴더', properties: ['openDirectory', 'createDirectory'] })
   if (selected.canceled || !selected.filePaths[0]) return null
-  try { return basename(await saveUnique(selected.filePaths[0], record.path, png)) }
+  try { return basename(await saveUnique(selected.filePaths[0], record.path, encoded, request.output.format === 'jpg' ? '.jpg' : '.png')) }
   catch (error) {
     if (error instanceof SaveCleanupError) throw error
     throw new Error('저장하지 못했습니다. 폴더 권한·여유 공간을 확인하세요. 편집 내용은 유지됩니다.', { cause: error })
@@ -77,7 +90,7 @@ function createWindow() {
   })
   allowClose = false; pendingClose = null; quitRequested = false
   win.on('close', event => {
-    if (allowClose || (!photos.list().length && !busy)) return
+    if (allowClose || (!photos.list().length && !busy && !settingsPending)) return
     event.preventDefault()
     if (!pendingClose) {
       pendingClose = randomUUID()
@@ -151,6 +164,16 @@ app.whenReady().then(() => {
       finally { busy = false }
     })
   }
+  for (const channel of ['output:get', 'output:update']) {
+    ipcMain.handle(channel, async (event, ...args: unknown[]): Promise<Result<unknown>> => {
+      if (!win || !trustedSender(event.sender.id, win.webContents.id, event.senderFrame === win.webContents.mainFrame, event.senderFrame?.url ?? '', pageUrl)) return { ok: false, error: '허용되지 않은 요청입니다.' }
+      if ((channel === 'output:get' && args.length) || (channel === 'output:update' && (args.length !== 1 || !validOutput(args[0])))) return { ok: false, error: '잘못된 출력 설정입니다.' }
+      settingsPending++
+      try { return { ok: true, value: channel === 'output:get' ? await outputStore.get() : await outputStore.set(args[0] as import('../shared/output').OutputSettings) } }
+      catch { return { ok: false, error: '출력 설정을 읽거나 저장하지 못했습니다. 기존 설정 파일은 보존합니다.' } }
+      finally { settingsPending-- }
+    })
+  }
   const libraryActions: Record<string, (...args: unknown[]) => Promise<unknown>> = {
     'library:list': async () => library.list(),
     'library:import': async () => {
@@ -212,7 +235,7 @@ app.whenReady().then(() => {
       pendingClose = null; quitRequested = false
       return { ok: true, value: null }
     }
-    if (busy) return { ok: false, error: '작업이 끝난 뒤 닫을 수 있습니다.' }
+    if (busy || settingsPending) return { ok: false, error: '작업이 끝난 뒤 닫을 수 있습니다.' }
     pendingClose = null; allowClose = true
     setImmediate(() => { if (quitRequested) app.quit(); else win?.close() })
     return { ok: true, value: null }
@@ -223,7 +246,7 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
 
 app.on('before-quit', event => {
-  if (win && !allowClose && (photos.list().length || busy)) {
+  if (win && !allowClose && (photos.list().length || busy || settingsPending)) {
     event.preventDefault()
     quitRequested = true
     win.close()

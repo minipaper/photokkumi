@@ -47,3 +47,8 @@ aside { width: 300px; flex-shrink: 0; }
 .photo-item span { font-size: 12px; overflow-wrap: anywhere; }
 .photo-item[aria-pressed=true] { border-color: #6047cb; background: #f2efff; }
 .canvas-area:focus-visible { outline: 3px solid #a898ee; outline-offset: -3px; }
+.output-settings { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 0; padding: 10px; background: white; border: 1px solid #dce0e8; border-radius: 8px; font-size: 13px; }
+.output-settings label { gap: 6px; }
+.output-settings input[type=number] { width: 80px; }
+.output-settings input[type=checkbox] { width: auto; }
+.output-settings select { padding: 6px; }

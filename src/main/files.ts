@@ -43,7 +43,7 @@ async function writeExclusive(destination: string, bytes: Uint8Array) {
   }
 }
 
-export async function saveUnique(directory: string, source: string, bytes: Uint8Array, extension: '.png' | '.zip' = '.png'): Promise<string> {
+export async function saveUnique(directory: string, source: string, bytes: Uint8Array, extension: '.png' | '.jpg' | '.zip' = '.png'): Promise<string> {
   // Control characters must be removed from Windows filenames.
   // eslint-disable-next-line no-control-regex
   const stem = basename(source, extname(source)).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').slice(0, 100) || 'photo'

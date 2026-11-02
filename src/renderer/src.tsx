@@ -7,6 +7,7 @@ import { LibraryPanel } from './LibraryPanel'
 import { EditorCanvas } from './EditorCanvas'
 import { addInstance, updateSelected, removeSelected, duplicateSelected, reorderSelected, emptyHistory, commitScene, undoScene, redoScene, MAX_INSTANCES, MAX_DECODED_STICKER_PIXELS, type Scene, type SceneHistory } from '../shared/scene'
 import { createPhotoSession, editPhotoSession, savePhotoSession, discardPhotoSession, sessionAssets, type PhotoSession } from '../shared/photo-session'
+import { DEFAULT_OUTPUT, validOutput, outputSize, outputKey, type OutputSettings } from '../shared/output'
 import { composePng } from './export'
 import './style.css'
 
@@ -21,6 +22,9 @@ async function decode(asset: ImageAsset): Promise<DecodedAsset> {
   return { id: asset.id, name: asset.name, width: asset.width, height: asset.height, mime: asset.mime, bitmap }
 }
 function App() {
+  const [output, setOutput] = useState<OutputSettings>({ ...DEFAULT_OUTPUT })
+  const [outputLoaded, setOutputLoaded] = useState(false)
+  const outputWrite = useRef<Promise<void>>(Promise.resolve())
   const [photos, setPhotos] = useState<PhotoInfo[]>([])
   const sessions = useRef(new Map<string, PhotoSession>())
   const activeId = useRef<string | null>(null)
@@ -49,9 +53,7 @@ function App() {
     if (!closeRequest || busy) return
     switchDialog.current?.close(); setPendingPhoto(null)
     if (!dirty) {
-      void window.photokkumi.resolveClose({ requestId: closeRequest, action: 'close' }).then(result => {
-        if (!result.ok) setError(result.error)
-      })
+      void resolveClose('close').catch(value => setError(String(value)))
     } else if (!closeDialog.current?.open) closeDialog.current?.showModal()
   }, [closeRequest, busy, dirty])
   useEffect(() => () => photo?.bitmap.close(), [photo])
@@ -91,7 +93,18 @@ function App() {
     catch (value) { setError(value instanceof Error ? value.message : '작업에 실패했습니다.') }
     finally { operation.current = false; setBusy(false) }
   }
-  useEffect(() => { void run(async () => { await refreshLibrary() }) }, [])
+  useEffect(() => { void run(async () => {
+    await refreshLibrary()
+    const result = await window.photokkumi.getOutputSettings()
+    if (!result.ok) throw new Error(result.error)
+    setOutput(result.value); setOutputLoaded(true)
+  }) }, [])
+  useEffect(() => {
+    if (!outputLoaded || !validOutput(output)) return
+    const write = window.photokkumi.updateOutputSettings(output).then(result => { if (!result.ok) throw new Error(result.error) })
+    outputWrite.current = write
+    void write.catch(value => setError(String(value)))
+  }, [output, outputLoaded])
   async function refreshLibrary() {
     const result = await window.photokkumi.listStickers()
     if (!result.ok) throw new Error(result.error)
@@ -234,11 +247,16 @@ function App() {
   })
   async function saveCurrent(): Promise<boolean> {
     if (!photo) return false
-    const png = await composePng(photo.bitmap, currentHistory.current.present.stickers, assets.current)
-    const result = await window.photokkumi.savePng({ photoId: photo.id, png })
+    if (!outputLoaded) throw new Error('출력 설정을 불러온 뒤 저장할 수 있습니다.')
+    outputSize(photo.width, photo.height, output)
+    setStatus('저장 중…')
+    const persisted = await window.photokkumi.updateOutputSettings(output)
+    if (!persisted.ok) throw new Error(persisted.error)
+    const png = await composePng(photo.bitmap, currentHistory.current.present.stickers, assets.current, output)
+    const result = await window.photokkumi.saveImage({ photoId: photo.id, png, output })
     if (!result.ok) throw new Error(result.error)
     if (!result.value) { setStatus('저장이 취소되었습니다. 편집 내용은 유지됩니다.'); return false }
-    sessions.current.set(photo.id, savePhotoSession(sessions.current.get(photo.id)!))
+    sessions.current.set(photo.id, savePhotoSession(sessions.current.get(photo.id)!, outputKey(output)))
     setDirty(false); setStatus(`저장 완료 · ${result.value}`)
     await syncReferences(photo.id)
     return true
@@ -248,13 +266,16 @@ function App() {
   const saveNext = () => run(async () => {
     if (!photo) return
     const session = sessions.current.get(photo.id)!
-    if ((session.dirty || !session.saved) && !await saveCurrent()) return
+    if ((session.dirty || !session.saved || session.outputKey !== outputKey(output)) && !await saveCurrent()) return
     const next = photos[photoIndex + 1]
     if (next) await activatePhoto(next.id)
     else setStatus('마지막 사진까지 저장했습니다. 작업이 완료되었습니다.')
   })
   async function resolveClose(action: 'close' | 'cancel') {
     if (!closeRequest) return
+    // A failed preference write must not trap the user in the app. Image saves
+    // still fail explicitly in saveCurrent; discarding edits can always close.
+    if (action === 'close') await outputWrite.current.catch(() => undefined)
     const requestId = closeRequest
     const result = await window.photokkumi.resolveClose({ requestId, action })
     if (!result.ok) throw new Error(result.error)
@@ -271,6 +292,11 @@ function App() {
       throw error
     }
   })
+  let outputError = '', outputLabel = ''
+  try {
+    if (!validOutput(output)) throw new Error('출력 너비는 1~8192 정수, JPG 품질은 1~100 정수로 입력하세요.')
+    if (photo) { const size = outputSize(photo.width, photo.height, output); outputLabel = `${size.width} × ${size.height} px` }
+  } catch (value) { outputError = value instanceof Error ? value.message : '출력 설정을 확인하세요.' }
   return <main onKeyDown={handleEditorKey}>
     <dialog ref={switchDialog} aria-labelledby="switch-title" onCancel={event => { event.preventDefault(); if (!busy) cancelSwitch() }}>
       <h2 id="switch-title">사진을 바꾸기 전 저장</h2>
@@ -295,9 +321,20 @@ function App() {
     <nav aria-label="파일 작업">
       <button onClick={choosePhoto} disabled={busy || !!pendingPhoto}>사진 열기</button>
       <button onClick={chooseSticker} disabled={busy || !photo}>PNG 스티커 열기</button>
-      <button onClick={saveNext} disabled={busy || !photo}>저장하고 다음</button>
-      <button className="primary" onClick={save} disabled={busy || !photo}>{busy ? '처리 중…' : 'PNG로 저장'}</button>
+      <button onClick={saveNext} disabled={busy || !photo || !outputLoaded || !!outputError}>저장하고 다음</button>
+      <button className="primary" onClick={save} disabled={busy || !photo || !outputLoaded || !!outputError}>{busy ? '처리 중…' : output.format === 'jpg' ? 'JPG로 저장' : 'PNG로 저장'}</button>
     </nav>
+    <fieldset className="output-settings" disabled={busy || !outputLoaded} aria-label="출력 설정">
+      <label>형식<select aria-label="출력 형식" value={output.format} onChange={e => setOutput({ ...output, format: e.target.value as 'png' | 'jpg' })}>
+        <option value="png">PNG</option><option value="jpg">JPG</option>
+      </select></label>
+      <label><input type="checkbox" checked={output.width === null} onChange={e => setOutput({ ...output, width: e.target.checked ? null : photo?.width ?? 1200 })} />원본 크기</label>
+      <label>출력 너비<input aria-label="출력 너비" type="number" min="1" max="8192" step="1" disabled={output.width === null} value={output.width === null || !Number.isFinite(output.width) ? '' : output.width} onChange={e => setOutput({ ...output, width: e.target.valueAsNumber })} /></label>
+      <label><input type="checkbox" checked={output.preventUpscale} onChange={e => setOutput({ ...output, preventUpscale: e.target.checked })} />확대 방지</label>
+      <label>JPG 품질<input aria-label="JPG 품질" type="number" min="1" max="100" step="1" disabled={output.format === 'png'} value={Number.isFinite(output.quality) ? output.quality : ''} onChange={e => setOutput({ ...output, quality: e.target.valueAsNumber })} /></label>
+      <span data-testid="output-size">{outputLabel}</span>
+      {outputError && <span role="alert">{outputError}</span>}
+    </fieldset>
     <section className="workspace">
       {!!photos.length && <section className="photo-list" aria-label="사진 목록">
         <h2>사진 {photoIndex + 1} / {photos.length}</h2>
@@ -310,12 +347,12 @@ function App() {
           return <button key={item.id} className="photo-item" disabled={busy} aria-label={`사진 ${index + 1}: ${item.name}`} aria-pressed={photo?.id === item.id} onClick={() => requestPhoto(item.id)}>
             <img src={item.thumbnail} alt="" width="80" height="60" loading="lazy" />
             <span>{index + 1}. {item.name}</span>
-            <small>{session.dirty ? (session.saved ? '저장 후 수정' : '수정됨') : session.saved ? '저장 완료' : '미작업'}</small>
+            <small>{session.dirty ? (session.saved ? '저장 후 수정' : '수정됨') : session.saved ? (session.outputKey === outputKey(output) ? '저장 완료' : '출력 설정 변경') : '미작업'}</small>
           </button>
         })}
       </section>}
       {photo ? <EditorCanvas key={photo.id} photo={photo} assets={assets.current} scene={scene} disabled={busy} onSelect={selectInstance} onChange={(id, value) => change(value, id)} />
-        : <div className="empty">사진을 열면 이곳에서 편집할 수 있습니다.<small>사진 여러 장 JPG/PNG · 스티커 PNG · 결과는 원본 크기 PNG</small></div>}
+        : <div className="empty">사진을 열면 이곳에서 편집할 수 있습니다.<small>사진 여러 장 JPG/PNG · 스티커 PNG · 결과는 JPG/PNG</small></div>}
       <aside>
         <LibraryPanel items={libraryItems} disabled={busy} canUse={!!photo} activeIds={referencedIds}
           onUse={useSticker} onImport={importStickers} onBackup={backupLibrary} onRestore={restoreLibrary}
@@ -349,7 +386,7 @@ function App() {
         {sticker && <p className="file-info">스티커: {sticker.name}</p>}
       </aside>
     </section>
-    <footer><p role="status" aria-live="polite">{status}</p>{error && <p role="alert">{error}</p>}<small>원본은 바꾸지 않습니다. 새 PNG 파일로 저장합니다. 사진별 편집은 앱을 닫으면 사라집니다. 저장한 PNG와 스티커 라이브러리는 유지됩니다.</small></footer>
+    <footer><p role="status" aria-live="polite">{status}</p>{error && <p role="alert">{error}</p>}<small>원본은 바꾸지 않습니다. 새 JPG/PNG 파일로 저장합니다. 사진별 편집은 앱을 닫으면 사라집니다. 저장한 결과와 스티커 라이브러리는 유지됩니다.</small></footer>
   </main>
 }
 createRoot(document.getElementById('root')!).render(<App />)

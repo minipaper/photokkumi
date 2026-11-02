@@ -1,0 +1,11 @@
+node_modules/
+out/
+release/
+coverage/
+playwright-report/
+test-results/
+.app-data/
+*.log
+*.tmp
+.env*
+.DS_Store

@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { Stage, Layer, Image as CanvasImage, Transformer, Group } from 'react-konva'
-import type Konva from 'konva'
-import type { ImageAsset, PhotoApi, Placement, StickerInstance } from '../shared/model'
-import { fitScale, validPlacement } from '../shared/model'
+import type { ImageAsset, PhotoApi, Placement } from '../shared/model'
+import { validPlacement } from '../shared/model'
 import type { LibrarySticker, StickerMetadata } from '../shared/library'
 import { LibraryPanel } from './LibraryPanel'
+import { EditorCanvas } from './EditorCanvas'
+import { addInstance, updateSelected, removeSelected, duplicateSelected, reorderSelected, emptyHistory, commitScene, undoScene, redoScene, referencedAssets, MAX_INSTANCES, MAX_DECODED_STICKER_PIXELS, type Scene, type SceneHistory } from '../shared/scene'
 import { composePng } from './export'
 import './style.css'
 
@@ -19,54 +19,15 @@ async function decode(asset: ImageAsset): Promise<DecodedAsset> {
   }
   return { id: asset.id, name: asset.name, width: asset.width, height: asset.height, mime: asset.mime, bitmap }
 }
-function EditorCanvas({ photo, sticker, placement, disabled, onChange }: {
-  photo: DecodedAsset; sticker: DecodedAsset | null; placement: StickerInstance | null; disabled: boolean; onChange: (value: Placement) => void
-}) {
-  const area = useRef<HTMLDivElement>(null)
-  const image = useRef<Konva.Image>(null)
-  const transformer = useRef<Konva.Transformer>(null)
-  const [size, setSize] = useState({ width: 600, height: 480 })
-  useEffect(() => {
-    const observer = new ResizeObserver(([entry]) => setSize({ width: entry.contentRect.width - 48, height: entry.contentRect.height - 48 }))
-    observer.observe(area.current!)
-    return () => observer.disconnect()
-  }, [])
-  useEffect(() => {
-    if (image.current && transformer.current) transformer.current.nodes([image.current])
-  }, [sticker?.id])
-  const scale = fitScale(photo.width, photo.height, size.width, size.height)
-  return <div ref={area} className="canvas-area" data-testid="canvas-area">
-    <div className="canvas-frame" data-testid="canvas-frame" data-scale={scale}>
-      <Stage width={photo.width * scale} height={photo.height * scale} scaleX={scale} scaleY={scale}>
-        <Layer ref={layer => { layer?.getNativeCanvasElement().setAttribute('data-testid', 'photo-content') }}>
-          <Group clipX={0} clipY={0} clipWidth={photo.width} clipHeight={photo.height}>
-            <CanvasImage image={photo.bitmap} width={photo.width} height={photo.height} listening={false} />
-            {sticker && placement && <CanvasImage ref={image} image={sticker.bitmap}
-              x={placement.x} y={placement.y} width={placement.width} height={placement.height}
-              offsetX={placement.width / 2} offsetY={placement.height / 2} rotation={placement.rotation}
-              draggable={!disabled} listening={!disabled}
-              onDragEnd={event => onChange({ ...placement, x: event.target.x(), y: event.target.y() })}
-              onTransformEnd={() => {
-                const node = image.current!
-                const next = { x: node.x(), y: node.y(), width: node.width() * node.scaleX(), height: node.height() * node.scaleY(), rotation: node.rotation() }
-                node.scale({ x: 1, y: 1 })
-                onChange(next)
-              }} />}
-          </Group>
-        </Layer>
-        <Layer ref={layer => { layer?.getNativeCanvasElement().setAttribute('data-testid', 'editor-overlay') }}>
-          {sticker && placement && <Transformer ref={transformer} enabledAnchors={['top-left', 'top-right', 'bottom-left', 'bottom-right']}
-            keepRatio flipEnabled={false} rotateEnabled={!disabled} resizeEnabled={!disabled}
-            boundBoxFunc={(oldBox, newBox) => Math.abs(newBox.width) < 4 || Math.abs(newBox.height) < 4 || Math.abs(newBox.width) > 32768 * scale || Math.abs(newBox.height) > 32768 * scale ? oldBox : newBox} />}
-        </Layer>
-      </Stage>
-    </div>
-  </div>
-}
 function App() {
   const [photo, setPhoto] = useState<DecodedAsset | null>(null)
-  const [sticker, setSticker] = useState<DecodedAsset | null>(null)
-  const [placement, setPlacement] = useState<StickerInstance | null>(null)
+  const [history, setHistory] = useState<SceneHistory>(emptyHistory)
+  const currentHistory = useRef(history)
+  const assets = useRef(new Map<string, DecodedAsset>())
+  const scene = history.present
+  const placement = scene.stickers.find(item => item.id === scene.selectedId) ?? null
+  const sticker = placement ? assets.current.get(placement.assetId) : null
+  const referencedIds = referencedAssets(history)
   const [busy, setBusy] = useState(false)
   const operation = useRef(false)
   const [status, setStatus] = useState('사진 한 장을 열어 시작하세요.')
@@ -85,7 +46,30 @@ function App() {
     } else if (!closeDialog.current?.open) closeDialog.current?.showModal()
   }, [closeRequest, busy, dirty])
   useEffect(() => () => photo?.bitmap.close(), [photo])
-  useEffect(() => () => sticker?.bitmap.close(), [sticker])
+  useEffect(() => {
+    const keep = new Set(referencedAssets(history))
+    for (const [id, asset] of assets.current) if (!keep.has(id)) { asset.bitmap.close(); assets.current.delete(id) }
+  }, [history])
+  useEffect(() => {
+    const cache = assets.current
+    return () => { for (const asset of cache.values()) asset.bitmap.close(); cache.clear() }
+  }, [])
+  async function syncReferences(next: SceneHistory) {
+    if (!photo) return
+    const result = await window.photokkumi.setStickerReferences(photo.id, referencedAssets(next))
+    if (!result.ok) throw new Error(result.error)
+  }
+  function applyHistory(next: SceneHistory) {
+    currentHistory.current = next; setHistory(next)
+    setDirty(true); setStatus('수정됨 · 저장이 필요합니다.')
+    void syncReferences(next).catch(value => setError(String(value)))
+  }
+  function editScene(next: Scene) { applyHistory(commitScene(currentHistory.current, next)) }
+  function selectInstance(id: string | null) {
+    if (operation.current || currentHistory.current.present.selectedId === id) return
+    const next = { ...currentHistory.current, present: { ...currentHistory.current.present, selectedId: id } }
+    currentHistory.current = next; setHistory(next)
+  }
 
   async function run(action: () => Promise<void>) {
     if (operation.current) return
@@ -105,6 +89,7 @@ function App() {
     await run(async () => {
       const result = await action()
       if (!result.ok) { await refreshLibrary(); throw new Error(result.error) }
+      for (const item of result.value) { const cached = assets.current.get(item.id); if (cached) cached.name = item.name }
       setLibraryItems(result.value); success = true
     })
     return success
@@ -126,28 +111,50 @@ function App() {
     if (!result.ok) throw new Error(result.error)
     if (result.value) { setLibraryItems(result.value); setStatus('복원 완료 · 기존 라이브러리에 병합했습니다.') }
   })
-  function placeSticker(decoded: DecodedAsset) {
-    if (!photo) { decoded.bitmap.close(); return }
-    const width = Math.min(decoded.width, photo.width / 3)
-    setSticker(decoded)
-    setPlacement({ assetId: decoded.id, x: photo.width / 2, y: photo.height / 2, width, height: width * decoded.height / decoded.width, rotation: 0, zOrder: 0 })
-    setDirty(true); setStatus('모서리 핸들로 크기, 위쪽 핸들로 회전을 조절하세요.')
+  async function placeSticker(asset: ImageAsset) {
+    if (!photo) return
+    try {
+      if (currentHistory.current.present.stickers.length >= MAX_INSTANCES) throw new Error('사진 한 장에는 스티커를 최대 200개 배치할 수 있습니다.')
+      let decoded = assets.current.get(asset.id)
+      if (!decoded) {
+        const total = [...assets.current.values()].reduce((sum, item) => sum + item.width * item.height, 0)
+        if (total + asset.width * asset.height > MAX_DECODED_STICKER_PIXELS) throw new Error('스티커 이미지 메모리 한도입니다. 배치·실행취소 이력을 비운 뒤 다시 시도하세요.')
+        decoded = await decode(asset)
+        assets.current.set(asset.id, decoded)
+      }
+      const width = Math.min(decoded.width, photo.width / 3)
+      const offset = Math.min((currentHistory.current.present.stickers.length % 10) * 20, photo.width / 8, photo.height / 8)
+      editScene(addInstance(currentHistory.current.present, {
+        id: crypto.randomUUID(), assetId: decoded.id, x: photo.width / 2 + offset, y: photo.height / 2 + offset,
+        width, height: width * decoded.height / decoded.width, rotation: 0, zOrder: 0
+      }))
+      setStatus('스티커를 추가했습니다. 클릭해 선택하고 각각 이동·크기·회전을 조절하세요.')
+    } finally { await syncReferences(currentHistory.current) }
   }
   const useSticker = (id: string) => run(async () => {
+    const cached = assets.current.get(id)
+    if (cached) { await placeSticker({ ...cached, bytes: new Uint8Array() }); return }
     const result = await window.photokkumi.useSticker(id)
     if (!result.ok) throw new Error(result.error)
-    placeSticker(await decode(result.value))
+    await placeSticker(result.value)
   })
-  function change(value: Placement) {
-    if (!placement || !validPlacement(value)) return
-    setPlacement({ ...placement, ...value }); setDirty(true); setStatus('수정됨 · 저장이 필요합니다.')
+  function change(value: Placement, id = placement?.id) {
+    if (!id || !validPlacement(value)) return
+    const current = currentHistory.current.present
+    editScene(updateSelected({ ...current, selectedId: id }, value))
+  }
+  const duplicate = () => run(async () => { editScene(duplicateSelected(currentHistory.current.present, crypto.randomUUID())) })
+  const clearScene = () => {
+    if (!window.confirm('사진의 모든 스티커와 실행취소 이력을 비울까요? 이 작업은 실행 취소할 수 없습니다.')) return
+    const next = emptyHistory()
+    applyHistory(next)
   }
   const choosePhoto = () => run(async () => {
     const result = await window.photokkumi.choosePhoto()
     if (!result.ok) throw new Error(result.error)
     if (!result.value) return
     const decoded = await decode(result.value)
-    setPhoto(decoded); setSticker(null); setPlacement(null); setDirty(false)
+    setPhoto(decoded); currentHistory.current = emptyHistory(); setHistory(currentHistory.current); setDirty(false)
     setStatus('라이브러리의 스티커를 클릭해 배치하세요.')
   })
   const chooseSticker = () => run(async () => {
@@ -155,12 +162,12 @@ function App() {
     const result = await window.photokkumi.chooseSticker()
     if (!result.ok) throw new Error(result.error)
     if (!result.value) return
-    placeSticker(await decode(result.value))
+    await placeSticker(result.value)
     await refreshLibrary()
   })
   async function saveCurrent(): Promise<boolean> {
     if (!photo) return false
-    const png = await composePng(photo.bitmap, sticker?.bitmap ?? null, placement)
+    const png = await composePng(photo.bitmap, currentHistory.current.present.stickers, assets.current)
     const result = await window.photokkumi.savePng({ photoId: photo.id, png })
     if (!result.ok) throw new Error(result.error)
     if (!result.value) { setStatus('저장이 취소되었습니다. 편집 내용은 유지됩니다.'); return false }
@@ -196,20 +203,36 @@ function App() {
         <button disabled={busy} autoFocus onClick={cancelClose}>취소</button>
       </div>
     </dialog>
-    <header><div><h1>포토꾸미</h1><p>사진 한 장에 나만의 PNG 스티커</p></div><span className="badge">단계 B</span></header>
+    <header><div><h1>포토꾸미</h1><p>사진 한 장에 여러 PNG 스티커</p></div><span className="badge">한 장 편집</span></header>
     <nav aria-label="파일 작업">
       <button onClick={choosePhoto} disabled={busy || !!photo}>사진 열기</button>
       <button onClick={chooseSticker} disabled={busy || !photo}>PNG 스티커 열기</button>
       <button className="primary" onClick={save} disabled={busy || !photo}>{busy ? '처리 중…' : 'PNG로 저장'}</button>
     </nav>
     <section className="workspace">
-      {photo ? <EditorCanvas photo={photo} sticker={sticker} placement={placement} disabled={busy} onChange={change} />
+      {photo ? <EditorCanvas photo={photo} assets={assets.current} scene={scene} disabled={busy} onSelect={selectInstance} onChange={(id, value) => change(value, id)} />
         : <div className="empty">사진을 열면 이곳에서 편집할 수 있습니다.<small>사진 JPG/PNG · 스티커 PNG · 결과는 원본 크기 PNG</small></div>}
       <aside>
-        <LibraryPanel items={libraryItems} disabled={busy} canUse={!!photo} activeId={placement?.assetId ?? null}
+        <LibraryPanel items={libraryItems} disabled={busy} canUse={!!photo} activeIds={referencedIds}
           onUse={useSticker} onImport={importStickers} onBackup={backupLibrary} onRestore={restoreLibrary}
           onUpdate={updateSticker} onDelete={deleteSticker} />
-        <h2>스티커 배치</h2>
+        <h2>사진에 붙인 스티커 <span data-testid="instance-count">{scene.stickers.length}</span>/200</h2>
+        <div className="instance-tools">
+          <button disabled={busy || !history.past.length} onClick={() => applyHistory(undoScene(currentHistory.current))}>실행 취소</button>
+          <button disabled={busy || !history.future.length} onClick={() => applyHistory(redoScene(currentHistory.current))}>다시 실행</button>
+          <button disabled={busy || !referencedIds.length} onClick={clearScene}>배치·이력 비우기</button>
+        </div>
+        <div className="instance-list" aria-label="사진의 스티커 목록">
+          {scene.stickers.map((item, index) => <button key={item.id} disabled={busy}
+            aria-label={`배치 ${index + 1}: ${assets.current.get(item.assetId)?.name ?? '스티커'}`} aria-pressed={scene.selectedId === item.id}
+            onClick={() => selectInstance(item.id)}>{index + 1}. {assets.current.get(item.assetId)?.name ?? '스티커'}</button>)}
+        </div>
+        <div className="instance-tools">
+          <button disabled={busy || !placement} onClick={duplicate}>선택 복제</button>
+          <button disabled={busy || !placement} onClick={() => editScene(removeSelected(currentHistory.current.present))}>선택 삭제</button>
+          <button disabled={busy || !placement || placement.zOrder === 0} onClick={() => editScene(reorderSelected(currentHistory.current.present, -1))}>뒤로</button>
+          <button disabled={busy || !placement || placement.zOrder === scene.stickers.length - 1} onClick={() => editScene(reorderSelected(currentHistory.current.present, 1))}>앞으로</button>
+        </div>
         <p>스티커를 드래그해 이동하세요. 모서리로 비율을 유지하며 크기를 바꾸고, 위쪽 핸들로 회전하세요.</p>
         {placement && <fieldset disabled={busy}>
           <label>중심 X<input aria-label="중심 X" type="number" value={Math.round(placement.x * 100) / 100} onChange={e => change({ ...placement, x: e.target.valueAsNumber })} /></label>

@@ -33,3 +33,8 @@ aside { width: 300px; flex-shrink: 0; }
 .sticker-actions { gap: 2px; margin-bottom: 0; } .library .sticker-actions button { padding: 4px; font-size: 11px; }
 .library-form { display: grid; gap: 8px; padding: 12px 0; }
 .sticker-grid { max-height: 280px; overflow-y: auto; }
+.instance-tools { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.instance-tools button, .instance-list button { padding: 6px 9px; font-size: 12px; }
+.instance-list { display: flex; flex-direction: column; gap: 4px; max-height: 130px; overflow-y: auto; }
+.instance-list button { text-align: left; }
+.instance-list button[aria-pressed=true] { border-color: #6047cb; background: #eee9ff; }

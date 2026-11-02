@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { LibrarySticker, StickerMetadata } from '../shared/library'
 interface Props {
-  items: LibrarySticker[]; disabled: boolean; canUse: boolean; activeId: string | null
+  items: LibrarySticker[]; disabled: boolean; canUse: boolean; activeIds: string[]
   onUse(id: string): void
   onImport(): void
   onBackup(): void
@@ -40,7 +40,7 @@ export function LibraryPanel(props: Props) {
         <div className="sticker-actions">
           <button aria-label={`${item.name} 즐겨찾기`} aria-pressed={item.favorite} disabled={props.disabled} onClick={() => { void props.onUpdate(item.id, { name: item.name, category: item.category, favorite: !item.favorite }) }}>{item.favorite ? '★' : '☆'}</button>
           <button aria-label={`${item.name} 정보 편집`} disabled={props.disabled} onClick={() => setEditing({ ...item })}>편집</button>
-          <button aria-label={`${item.name} 삭제`} disabled={props.disabled || props.activeId === item.id} onClick={() => setDeleting(item)}>삭제</button>
+          <button aria-label={`${item.name} 삭제`} disabled={props.disabled || props.activeIds.includes(item.id)} onClick={() => setDeleting(item)}>삭제</button>
         </div>
       </article>)}
     </div>
@@ -57,6 +57,6 @@ export function LibraryPanel(props: Props) {
       <button disabled={props.disabled} onClick={async () => { if (await props.onDelete(deleting.id)) setDeleting(null) }}>삭제 확인</button>
       <button disabled={props.disabled} onClick={() => setDeleting(null)}>삭제 취소</button>
     </div>}
-    <small>사진에는 한 번에 하나만 배치합니다. 사용 중인 스티커는 삭제할 수 없습니다.</small>
+    <small>스티커를 누를 때마다 사진에 추가합니다. 배치·실행취소 이력에서 사용 중인 파일은 삭제할 수 없습니다.</small>
   </section>
 }

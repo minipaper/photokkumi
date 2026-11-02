@@ -15,7 +15,7 @@ export interface Placement {
   height: number
   rotation: number
 }
-export interface StickerInstance extends Placement { assetId: string; zOrder: 0 }
+export interface StickerInstance extends Placement { id: string; assetId: string; zOrder: number }
 export type Result<T> = { ok: true; value: T } | { ok: false; error: string }
 export interface SaveRequest { photoId: string; png: Uint8Array }
 export interface CloseResolution { requestId: string; action: 'close' | 'cancel' }
@@ -24,6 +24,7 @@ export interface PhotoApi {
   resolveClose(request: CloseResolution): Promise<Result<null>>
   listStickers(): Promise<Result<LibrarySticker[]>>
   importStickers(): Promise<Result<LibraryImportResult | null>>
+  setStickerReferences(photoId: string, assetIds: string[]): Promise<Result<null>>
   useSticker(id: string): Promise<Result<ImageAsset>>
   updateSticker(id: string, metadata: StickerMetadata): Promise<Result<LibrarySticker[]>>
   deleteSticker(id: string): Promise<Result<LibrarySticker[]>>

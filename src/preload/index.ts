@@ -16,6 +16,7 @@ const api: PhotoApi = {
   resolveClose: request => ipcRenderer.invoke('window:resolve-close', request),
   listStickers: () => ipcRenderer.invoke('library:list'),
   importStickers: () => ipcRenderer.invoke('library:import'),
+  setStickerReferences: (photoId, assetIds) => ipcRenderer.invoke('editor:references', photoId, assetIds),
   useSticker: id => ipcRenderer.invoke('library:use', id),
   updateSticker: (id, metadata) => ipcRenderer.invoke('library:update', id, metadata),
   deleteSticker: id => ipcRenderer.invoke('library:delete', id),

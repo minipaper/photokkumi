@@ -13,7 +13,8 @@ import { MAX_BACKUP_BYTES, validAssetId, validMetadata } from '../shared/library
 const profile = app.commandLine.getSwitchValue('user-data-dir')
 if (profile) { mkdirSync(resolve(profile), { recursive: true }); app.setPath('userData', resolve(profile)) }
 const primaryInstance = app.requestSingleInstanceLock()
-let activeStickerId: string | null = null
+let activeStickerIds = new Set<string>()
+const permittedStickerIds = new Set<string>()
 const library = new StickerLibrary(app.getPath('userData'), bytes => {
   const image = nativeImage.createFromBuffer(Buffer.from(bytes))
   if (image.isEmpty()) throw new Error('PNG를 디코딩할 수 없습니다.')
@@ -37,7 +38,7 @@ async function choose(kind: AssetKind): Promise<ImageAsset | null> {
     if (selected.canceled || !selected.filePaths[0]) return null
     const result = await library.importFiles(selected.filePaths)
     const asset = result.stickers.find(item => item.id === result.importedIds[0])!
-    activeStickerId = asset.id
+    activeStickerIds.add(asset.id); permittedStickerIds.add(asset.id)
     return { id: asset.id, name: asset.name, width: asset.width, height: asset.height, mime: 'image/png', bytes: await library.read(asset.id) }
   }
   const result = await dialog.showOpenDialog(win, {
@@ -65,7 +66,7 @@ async function choose(kind: AssetKind): Promise<ImageAsset | null> {
   const info = inspectImage(bytes, kind)
   if (nativeImage.createFromBuffer(bytes).isEmpty()) throw new Error('이미지를 디코딩할 수 없습니다.')
   const asset: ImageAsset = { id: randomUUID(), name: basename(path), ...info, bytes }
-  photo = { ...asset, path, bytes: new Uint8Array() }; activeStickerId = null
+  photo = { ...asset, path, bytes: new Uint8Array() }; activeStickerIds.clear(); permittedStickerIds.clear()
   return asset
 }
 
@@ -104,7 +105,7 @@ function createWindow() {
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.webContents.on('will-navigate', event => event.preventDefault())
   win.webContents.on('will-attach-webview', event => event.preventDefault())
-  win.on('closed', () => { win = null; photo = null; pendingClose = null; activeStickerId = null })
+  win.on('closed', () => { win = null; photo = null; pendingClose = null; activeStickerIds.clear(); permittedStickerIds.clear() })
   void win.loadURL(pageUrl)
 }
 
@@ -177,11 +178,11 @@ app.whenReady().then(() => {
       const bytes = await library.read(id as string)
       const asset = library.list().find(item => item.id === id)!
       const result: ImageAsset = { id: asset.id, name: asset.name, width: asset.width, height: asset.height, mime: 'image/png', bytes }
-      activeStickerId = asset.id
+      activeStickerIds.add(asset.id); permittedStickerIds.add(asset.id)
       return result
     },
     'library:update': async (id, metadata) => library.update(id as string, metadata as import('../shared/library').StickerMetadata),
-    'library:delete': async id => library.remove(id as string, activeStickerId),
+    'library:delete': async id => { const items = await library.remove(id as string, [...activeStickerIds]); permittedStickerIds.delete(id as string); return items },
     'library:backup': async () => {
       const bytes = await library.backup()
       const selected = await dialog.showOpenDialog(win!, { title: '라이브러리 백업 폴더', properties: ['openDirectory', 'createDirectory'] })
@@ -206,6 +207,13 @@ app.whenReady().then(() => {
       finally { busy = false }
     })
   }
+  ipcMain.handle('editor:references', (event, photoId: unknown, ids: unknown): Result<null> => {
+    if (!win || !trustedSender(event.sender.id, win.webContents.id, event.senderFrame === win.webContents.mainFrame, event.senderFrame?.url ?? '', pageUrl)) return { ok: false, error: '허용되지 않은 요청입니다.' }
+    if (!photo || photoId !== photo.id || !Array.isArray(ids) || ids.length > 100 || new Set(ids).size !== ids.length
+      || !ids.every(id => validAssetId(id) && permittedStickerIds.has(id))) return { ok: false, error: '잘못된 스티커 참조입니다.' }
+    activeStickerIds = new Set(ids)
+    return { ok: true, value: null }
+  })
   ipcMain.handle('window:resolve-close', (event, request: unknown): Result<null> => {
     if (!win || !trustedSender(event.sender.id, win.webContents.id, event.senderFrame === win.webContents.mainFrame, event.senderFrame?.url ?? '', pageUrl)) {
       return { ok: false, error: '허용되지 않은 요청입니다.' }

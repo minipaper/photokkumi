@@ -1,5 +1,5 @@
-import type { Placement } from '../shared/model'
-export async function composePng(photo: ImageBitmap, sticker: ImageBitmap | null, placement: Placement | null): Promise<Uint8Array> {
+import type { StickerInstance } from '../shared/model'
+export async function composePng(photo: ImageBitmap, instances: StickerInstance[], assets: ReadonlyMap<string, { bitmap: ImageBitmap }>): Promise<Uint8Array> {
   const canvas = document.createElement('canvas')
   canvas.width = photo.width
   canvas.height = photo.height
@@ -7,7 +7,9 @@ export async function composePng(photo: ImageBitmap, sticker: ImageBitmap | null
     const context = canvas.getContext('2d')
     if (!context) throw new Error('합성용 Canvas를 만들 수 없습니다.')
     context.drawImage(photo, 0, 0)
-    if (sticker && placement) {
+    for (const placement of [...instances].sort((a, b) => a.zOrder - b.zOrder)) {
+      const sticker = assets.get(placement.assetId)?.bitmap
+      if (!sticker) throw new Error('스티커 이미지가 없습니다.')
       context.save()
       context.translate(placement.x, placement.y)
       context.rotate(placement.rotation * Math.PI / 180)

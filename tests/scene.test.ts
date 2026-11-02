@@ -1,0 +1,43 @@
+import { expect, it } from 'vitest'
+import { addInstance, duplicateSelected, removeSelected, reorderSelected, updateSelected, commitScene, undoScene, redoScene, emptyHistory } from '../src/shared/scene'
+const first = { id: 'a', assetId: 'same', x: 100, y: 100, width: 80, height: 40, rotation: 0, zOrder: 0 }
+it('동일/서로 다른 asset은 인스턴스 ID로 독립 배치한다', () => {
+  let scene = addInstance(emptyHistory().present, first)
+  scene = addInstance(scene, { ...first, id: 'b' })
+  scene = updateSelected(scene, { ...first, x: 300, rotation: 90 })
+  scene = addInstance(scene, { ...first, id: 'c', assetId: 'other' })
+  expect(scene.stickers).toHaveLength(3)
+  expect(scene.stickers[0]).toMatchObject({ id: 'a', x: 100, rotation: 0 })
+  expect(scene.stickers[1]).toMatchObject({ id: 'b', x: 300, rotation: 90 })
+  expect(() => addInstance(scene, first)).toThrow()
+})
+it('복제·순서·삭제와 undo/redo는 별도 배치를 보존한다', () => {
+  let history = emptyHistory()
+  history = commitScene(history, addInstance(history.present, first))
+  history = commitScene(history, duplicateSelected(history.present, 'b'))
+  expect(history.present.stickers[1]).toMatchObject({ id: 'b', assetId: 'same', x: 120 })
+  history = commitScene(history, reorderSelected(history.present, -1))
+  expect(history.present.stickers.map(item => item.id)).toEqual(['b', 'a'])
+  expect(history.present.stickers.map(item => item.zOrder)).toEqual([0, 1])
+  history = commitScene(history, removeSelected(history.present))
+  expect(history.present.stickers.map(item => item.id)).toEqual(['a'])
+  history = undoScene(history)
+  expect(history.present.stickers.map(item => item.id)).toEqual(['b', 'a'])
+  history = redoScene(history)
+  expect(history.present.stickers.map(item => item.id)).toEqual(['a'])
+})
+it('보기 선택은 이력 없이 바뀌며 새 수정은 redo를 버린다', () => {
+  let history = commitScene(emptyHistory(), addInstance(emptyHistory().present, first))
+  history = commitScene(history, duplicateSelected(history.present, 'b'))
+  history = undoScene(history)
+  history = commitScene(history, updateSelected(history.present, { ...first, rotation: 45 }))
+  expect(history.future).toEqual([])
+  expect(history.present.stickers[0].rotation).toBe(45)
+})
+it('인스턴스 상한·잘못된 변환을 거부하고 undo는 최대 50개다', () => {
+  let history = emptyHistory()
+  for (let i = 0; i < 200; i++) history = commitScene(history, addInstance(history.present, { ...first, id: String(i) }))
+  expect(history.past).toHaveLength(50)
+  expect(() => addInstance(history.present, { ...first, id: 'overflow' })).toThrow()
+  expect(() => updateSelected(history.present, { ...first, width: NaN })).toThrow()
+})

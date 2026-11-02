@@ -128,8 +128,8 @@ export class StickerLibrary {
     await this.commit(current.map(item => item.id === id ? { ...item, ...metadata, name: metadata.name.trim(), category: metadata.category.trim() } : item))
     return this.list()
   }
-  async remove(id: string, activeId: string | null) {
-    if (id === activeId) throw new Error('현재 사진에서 사용 중인 스티커는 삭제할 수 없습니다. 다른 스티커로 바꾸거나 앱을 다시 열어주세요.')
+  async remove(id: string, activeIds: string | string[] | null) {
+    if (Array.isArray(activeIds) ? activeIds.includes(id) : id === activeIds) throw new Error('현재 사진 또는 실행취소 이력에서 사용 중인 스티커는 삭제할 수 없습니다. 사진의 배치·이력을 비우거나 앱을 다시 열어주세요.')
     const current = this.list()
     if (!current.some(item => item.id === id)) throw new Error('스티커를 찾을 수 없습니다.')
     await this.commit(current.filter(item => item.id !== id))

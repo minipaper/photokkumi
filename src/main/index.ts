@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, protocol, session } from 'electron'
+import { mkdirSync } from 'node:fs'
 import { open, readFile } from 'node:fs/promises'
 import { basename, extname, join, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -6,7 +7,18 @@ import type { AssetKind, ImageAsset, Result, SaveRequest } from '../shared/model
 import { inspectImage, MAX_FILE_BYTES, MAX_OUTPUT_BYTES } from './images'
 import { saveUnique, SaveCleanupError } from './files'
 import { trustedSender, validSaveRequest } from './security'
+import { StickerLibrary, readBounded } from './library'
+import { MAX_BACKUP_BYTES, validAssetId, validMetadata } from '../shared/library'
 
+const profile = app.commandLine.getSwitchValue('user-data-dir')
+if (profile) { mkdirSync(resolve(profile), { recursive: true }); app.setPath('userData', resolve(profile)) }
+const primaryInstance = app.requestSingleInstanceLock()
+let activeStickerId: string | null = null
+const library = new StickerLibrary(app.getPath('userData'), bytes => {
+  const image = nativeImage.createFromBuffer(Buffer.from(bytes))
+  if (image.isEmpty()) throw new Error('PNG를 디코딩할 수 없습니다.')
+  return image.toPNG()
+})
 protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true } }])
 app.enableSandbox()
 let win: BrowserWindow | null = null
@@ -20,10 +32,18 @@ const pageUrl = developmentUrl ? new URL(developmentUrl).href : 'app://bundle/in
 
 async function choose(kind: AssetKind): Promise<ImageAsset | null> {
   if (!win) throw new Error('창을 사용할 수 없습니다.')
+  if (kind === 'sticker') {
+    const selected = await dialog.showOpenDialog(win, { title: 'PNG 스티커 등록', properties: ['openFile', 'multiSelections'], filters: [{ name: 'PNG', extensions: ['png'] }] })
+    if (selected.canceled || !selected.filePaths[0]) return null
+    const result = await library.importFiles(selected.filePaths)
+    const asset = result.stickers.find(item => item.id === result.importedIds[0])!
+    activeStickerId = asset.id
+    return { id: asset.id, name: asset.name, width: asset.width, height: asset.height, mime: 'image/png', bytes: await library.read(asset.id) }
+  }
   const result = await dialog.showOpenDialog(win, {
-    title: kind === 'photo' ? '사진 한 장 열기' : 'PNG 스티커 한 장 열기',
+    title: '사진 한 장 열기',
     properties: ['openFile'],
-    filters: [{ name: kind === 'photo' ? 'JPG / PNG' : 'PNG', extensions: kind === 'photo' ? ['jpg', 'jpeg', 'png'] : ['png'] }]
+    filters: [{ name: 'JPG / PNG', extensions: ['jpg', 'jpeg', 'png'] }]
   })
   if (result.canceled || !result.filePaths[0]) return null
   const path = result.filePaths[0]
@@ -45,7 +65,7 @@ async function choose(kind: AssetKind): Promise<ImageAsset | null> {
   const info = inspectImage(bytes, kind)
   if (nativeImage.createFromBuffer(bytes).isEmpty()) throw new Error('이미지를 디코딩할 수 없습니다.')
   const asset: ImageAsset = { id: randomUUID(), name: basename(path), ...info, bytes }
-  if (kind === 'photo') photo = { ...asset, path, bytes: new Uint8Array() }
+  photo = { ...asset, path, bytes: new Uint8Array() }; activeStickerId = null
   return asset
 }
 
@@ -84,14 +104,43 @@ function createWindow() {
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.webContents.on('will-navigate', event => event.preventDefault())
   win.webContents.on('will-attach-webview', event => event.preventDefault())
-  win.on('closed', () => { win = null; photo = null; pendingClose = null })
+  win.on('closed', () => { win = null; photo = null; pendingClose = null; activeStickerId = null })
   void win.loadURL(pageUrl)
 }
 
 app.whenReady().then(() => {
+  if (!primaryInstance) { app.quit(); return }
+  // Keep a rejected load promise so a damaged manifest can never become an empty overwrite.
+  const loadedLibrary = library.load()
+  void loadedLibrary.catch(() => undefined)
   const bundleRoot = resolve(__dirname, '../renderer')
+  const thumbnails = new Map<string, Buffer>()
+  let thumbnailWork = Promise.resolve()
   protocol.handle('app', async request => {
     const url = new URL(request.url)
+    const thumbnail = /^\/stickers\/([0-9a-f-]+)\.png$/.exec(url.pathname)
+    if (url.host === 'bundle' && thumbnail && validAssetId(thumbnail[1])) {
+      const task = thumbnailWork.then(async () => {
+        try {
+          await loadedLibrary
+          const id = thumbnail[1]
+          if (!library.list().some(item => item.id === id)) return new Response(null, { status: 404 })
+          let png = thumbnails.get(id)
+          if (!png) {
+            const bytes = await library.read(id)
+            const image = nativeImage.createFromBuffer(bytes)
+            if (image.isEmpty()) throw new Error('PNG decode failed')
+            const size = image.getSize(), factor = Math.min(1, 160 / size.width, 160 / size.height)
+            png = image.resize({ width: Math.max(1, Math.round(size.width * factor)), height: Math.max(1, Math.round(size.height * factor)) }).toPNG()
+            if (thumbnails.size >= 100) thumbnails.delete(thumbnails.keys().next().value!)
+            thumbnails.set(id, png)
+          }
+          return new Response(new Uint8Array(png), { headers: { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' } })
+        } catch { return new Response(null, { status: 404 }) }
+      })
+      thumbnailWork = task.then(() => undefined, () => undefined)
+      return task
+    }
     const file = resolve(bundleRoot, '.' + decodeURIComponent(url.pathname))
     if (url.host !== 'bundle' || !file.startsWith(bundleRoot + sep) || !['.html', '.js', '.css'].includes(extname(file))) return new Response(null, { status: 403 })
     try {
@@ -112,8 +161,48 @@ app.whenReady().then(() => {
       if (channel !== 'photo:save' && args.length) return { ok: false, error: '유효하지 않은 요청입니다.' }
       if (channel === 'photo:save' && (args.length !== 1 || !validSaveRequest(args[0]))) return { ok: false, error: '유효하지 않은 저장 요청입니다.' }
       busy = true
-      try { return { ok: true, value: await action(args[0] as SaveRequest) } }
+      try { if (channel === 'sticker:choose') await loadedLibrary; return { ok: true, value: await action(args[0] as SaveRequest) } }
       catch (error) { return { ok: false, error: error instanceof Error ? error.message : '작업에 실패했습니다.' } }
+      finally { busy = false }
+    })
+  }
+  const libraryActions: Record<string, (...args: unknown[]) => Promise<unknown>> = {
+    'library:list': async () => library.list(),
+    'library:import': async () => {
+      const selected = await dialog.showOpenDialog(win!, { title: 'PNG 스티커 등록', properties: ['openFile', 'multiSelections'], filters: [{ name: 'PNG', extensions: ['png'] }] })
+      return selected.canceled ? null : library.importFiles(selected.filePaths)
+    },
+    'library:use': async id => {
+      if (!photo) throw new Error('사진을 먼저 열어주세요.')
+      const bytes = await library.read(id as string)
+      const asset = library.list().find(item => item.id === id)!
+      const result: ImageAsset = { id: asset.id, name: asset.name, width: asset.width, height: asset.height, mime: 'image/png', bytes }
+      activeStickerId = asset.id
+      return result
+    },
+    'library:update': async (id, metadata) => library.update(id as string, metadata as import('../shared/library').StickerMetadata),
+    'library:delete': async id => library.remove(id as string, activeStickerId),
+    'library:backup': async () => {
+      const bytes = await library.backup()
+      const selected = await dialog.showOpenDialog(win!, { title: '라이브러리 백업 폴더', properties: ['openDirectory', 'createDirectory'] })
+      if (selected.canceled || !selected.filePaths[0]) return null
+      return basename(await saveUnique(selected.filePaths[0], 'PhotoKkumi-library', bytes, '.zip'))
+    },
+    'library:restore': async () => {
+      const selected = await dialog.showOpenDialog(win!, { title: '라이브러리 ZIP 복원', properties: ['openFile'], filters: [{ name: 'ZIP', extensions: ['zip'] }] })
+      if (selected.canceled || !selected.filePaths[0]) return null
+      return library.restore(await readBounded(selected.filePaths[0], MAX_BACKUP_BYTES))
+    }
+  }
+  for (const [channel, action] of Object.entries(libraryActions)) {
+    ipcMain.handle(channel, async (event, ...args: unknown[]): Promise<Result<unknown>> => {
+      if (!win || !trustedSender(event.sender.id, win.webContents.id, event.senderFrame === win.webContents.mainFrame, event.senderFrame?.url ?? '', pageUrl)) return { ok: false, error: '허용되지 않은 요청입니다.' }
+      const count = channel === 'library:update' ? 2 : ['library:use', 'library:delete'].includes(channel) ? 1 : 0
+      if (args.length !== count || (count > 0 && !validAssetId(args[0])) || (count === 2 && !validMetadata(args[1]))) return { ok: false, error: '유효하지 않은 라이브러리 요청입니다.' }
+      if (busy) return { ok: false, error: '현재 작업이 끝난 뒤 다시 시도하세요.' }
+      busy = true
+      try { await loadedLibrary; return { ok: true, value: await action(...args) } }
+      catch (error) { return { ok: false, error: error instanceof Error ? error.message : '라이브러리 작업에 실패했습니다.' } }
       finally { busy = false }
     })
   }
@@ -147,3 +236,5 @@ app.on('before-quit', event => {
     win.close()
   }
 })
+
+app.on('second-instance', () => { win?.restore(); win?.focus() })

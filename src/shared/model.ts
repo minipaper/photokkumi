@@ -1,3 +1,4 @@
+import type { LibrarySticker, StickerMetadata, LibraryImportResult } from './library'
 export type AssetKind = 'photo' | 'sticker'
 export interface ImageAsset {
   id: string
@@ -21,6 +22,13 @@ export interface CloseResolution { requestId: string; action: 'close' | 'cancel'
 export interface PhotoApi {
   onCloseRequested(callback: (requestId: string) => void): () => void
   resolveClose(request: CloseResolution): Promise<Result<null>>
+  listStickers(): Promise<Result<LibrarySticker[]>>
+  importStickers(): Promise<Result<LibraryImportResult | null>>
+  useSticker(id: string): Promise<Result<ImageAsset>>
+  updateSticker(id: string, metadata: StickerMetadata): Promise<Result<LibrarySticker[]>>
+  deleteSticker(id: string): Promise<Result<LibrarySticker[]>>
+  backupLibrary(): Promise<Result<string | null>>
+  restoreLibrary(): Promise<Result<LibrarySticker[] | null>>
   choosePhoto(): Promise<Result<ImageAsset | null>>
   chooseSticker(): Promise<Result<ImageAsset | null>>
   savePng(request: SaveRequest): Promise<Result<string | null>>

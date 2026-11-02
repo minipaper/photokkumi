@@ -14,6 +14,13 @@ const api: PhotoApi = {
     return () => { if (closeCallback === callback) closeCallback = null }
   },
   resolveClose: request => ipcRenderer.invoke('window:resolve-close', request),
+  listStickers: () => ipcRenderer.invoke('library:list'),
+  importStickers: () => ipcRenderer.invoke('library:import'),
+  useSticker: id => ipcRenderer.invoke('library:use', id),
+  updateSticker: (id, metadata) => ipcRenderer.invoke('library:update', id, metadata),
+  deleteSticker: id => ipcRenderer.invoke('library:delete', id),
+  backupLibrary: () => ipcRenderer.invoke('library:backup'),
+  restoreLibrary: () => ipcRenderer.invoke('library:restore'),
   choosePhoto: () => ipcRenderer.invoke('photo:choose'),
   chooseSticker: () => ipcRenderer.invoke('sticker:choose'),
   savePng: (request) => ipcRenderer.invoke('photo:save', request)

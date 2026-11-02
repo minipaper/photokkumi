@@ -4,6 +4,8 @@ import { Stage, Layer, Image as CanvasImage, Transformer, Group } from 'react-ko
 import type Konva from 'konva'
 import type { ImageAsset, PhotoApi, Placement, StickerInstance } from '../shared/model'
 import { fitScale, validPlacement } from '../shared/model'
+import type { LibrarySticker, StickerMetadata } from '../shared/library'
+import { LibraryPanel } from './LibraryPanel'
 import { composePng } from './export'
 import './style.css'
 
@@ -69,6 +71,7 @@ function App() {
   const operation = useRef(false)
   const [status, setStatus] = useState('사진 한 장을 열어 시작하세요.')
   const [error, setError] = useState('')
+  const [libraryItems, setLibraryItems] = useState<LibrarySticker[]>([])
   const [dirty, setDirty] = useState(false)
   const [closeRequest, setCloseRequest] = useState<string | null>(null)
   const closeDialog = useRef<HTMLDialogElement>(null)
@@ -91,6 +94,50 @@ function App() {
     catch (value) { setError(value instanceof Error ? value.message : '작업에 실패했습니다.') }
     finally { operation.current = false; setBusy(false) }
   }
+  useEffect(() => { void run(async () => { await refreshLibrary() }) }, [])
+  async function refreshLibrary() {
+    const result = await window.photokkumi.listStickers()
+    if (!result.ok) throw new Error(result.error)
+    setLibraryItems(result.value)
+  }
+  async function libraryChange(action: () => Promise<import('../shared/model').Result<LibrarySticker[]>>): Promise<boolean> {
+    let success = false
+    await run(async () => {
+      const result = await action()
+      if (!result.ok) { await refreshLibrary(); throw new Error(result.error) }
+      setLibraryItems(result.value); success = true
+    })
+    return success
+  }
+  const updateSticker = (id: string, metadata: StickerMetadata) => libraryChange(() => window.photokkumi.updateSticker(id, metadata))
+  const deleteSticker = (id: string) => libraryChange(() => window.photokkumi.deleteSticker(id))
+  const importStickers = () => run(async () => {
+    const result = await window.photokkumi.importStickers()
+    if (!result.ok) throw new Error(result.error)
+    if (result.value) { setLibraryItems(result.value.stickers); setStatus('스티커를 등록했습니다. 같은 PNG는 중복 등록하지 않습니다.') }
+  })
+  const backupLibrary = () => run(async () => {
+    const result = await window.photokkumi.backupLibrary()
+    if (!result.ok) throw new Error(result.error)
+    if (result.value) setStatus(`백업 완료 · ${result.value}`)
+  })
+  const restoreLibrary = () => run(async () => {
+    const result = await window.photokkumi.restoreLibrary()
+    if (!result.ok) throw new Error(result.error)
+    if (result.value) { setLibraryItems(result.value); setStatus('복원 완료 · 기존 라이브러리에 병합했습니다.') }
+  })
+  function placeSticker(decoded: DecodedAsset) {
+    if (!photo) { decoded.bitmap.close(); return }
+    const width = Math.min(decoded.width, photo.width / 3)
+    setSticker(decoded)
+    setPlacement({ assetId: decoded.id, x: photo.width / 2, y: photo.height / 2, width, height: width * decoded.height / decoded.width, rotation: 0, zOrder: 0 })
+    setDirty(true); setStatus('모서리 핸들로 크기, 위쪽 핸들로 회전을 조절하세요.')
+  }
+  const useSticker = (id: string) => run(async () => {
+    const result = await window.photokkumi.useSticker(id)
+    if (!result.ok) throw new Error(result.error)
+    placeSticker(await decode(result.value))
+  })
   function change(value: Placement) {
     if (!placement || !validPlacement(value)) return
     setPlacement({ ...placement, ...value }); setDirty(true); setStatus('수정됨 · 저장이 필요합니다.')
@@ -101,18 +148,15 @@ function App() {
     if (!result.value) return
     const decoded = await decode(result.value)
     setPhoto(decoded); setSticker(null); setPlacement(null); setDirty(false)
-    setStatus('PNG 스티커 한 장을 열어 배치하세요.')
+    setStatus('라이브러리의 스티커를 클릭해 배치하세요.')
   })
   const chooseSticker = () => run(async () => {
     if (!photo) return
     const result = await window.photokkumi.chooseSticker()
     if (!result.ok) throw new Error(result.error)
     if (!result.value) return
-    const decoded = await decode(result.value)
-    const width = Math.min(decoded.width, photo.width / 3)
-    setSticker(decoded)
-    setPlacement({ assetId: decoded.id, x: photo.width / 2, y: photo.height / 2, width, height: width * decoded.height / decoded.width, rotation: 0, zOrder: 0 })
-    setDirty(true); setStatus('모서리 핸들로 크기, 위쪽 핸들로 회전을 조절하세요.')
+    placeSticker(await decode(result.value))
+    await refreshLibrary()
   })
   async function saveCurrent(): Promise<boolean> {
     if (!photo) return false
@@ -152,7 +196,7 @@ function App() {
         <button disabled={busy} autoFocus onClick={cancelClose}>취소</button>
       </div>
     </dialog>
-    <header><div><h1>포토꾸미</h1><p>사진 한 장에 나만의 PNG 스티커</p></div><span className="badge">단계 A</span></header>
+    <header><div><h1>포토꾸미</h1><p>사진 한 장에 나만의 PNG 스티커</p></div><span className="badge">단계 B</span></header>
     <nav aria-label="파일 작업">
       <button onClick={choosePhoto} disabled={busy || !!photo}>사진 열기</button>
       <button onClick={chooseSticker} disabled={busy || !photo}>PNG 스티커 열기</button>
@@ -161,7 +205,11 @@ function App() {
     <section className="workspace">
       {photo ? <EditorCanvas photo={photo} sticker={sticker} placement={placement} disabled={busy} onChange={change} />
         : <div className="empty">사진을 열면 이곳에서 편집할 수 있습니다.<small>사진 JPG/PNG · 스티커 PNG · 결과는 원본 크기 PNG</small></div>}
-      <aside><h2>스티커 배치</h2>
+      <aside>
+        <LibraryPanel items={libraryItems} disabled={busy} canUse={!!photo} activeId={placement?.assetId ?? null}
+          onUse={useSticker} onImport={importStickers} onBackup={backupLibrary} onRestore={restoreLibrary}
+          onUpdate={updateSticker} onDelete={deleteSticker} />
+        <h2>스티커 배치</h2>
         <p>스티커를 드래그해 이동하세요. 모서리로 비율을 유지하며 크기를 바꾸고, 위쪽 핸들로 회전하세요.</p>
         {placement && <fieldset disabled={busy}>
           <label>중심 X<input aria-label="중심 X" type="number" value={Math.round(placement.x * 100) / 100} onChange={e => change({ ...placement, x: e.target.valueAsNumber })} /></label>

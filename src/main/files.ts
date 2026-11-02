@@ -43,7 +43,7 @@ async function writeExclusive(destination: string, bytes: Uint8Array) {
   }
 }
 
-export async function saveUnique(directory: string, source: string, bytes: Uint8Array): Promise<string> {
+export async function saveUnique(directory: string, source: string, bytes: Uint8Array, extension: '.png' | '.zip' = '.png'): Promise<string> {
   // Control characters must be removed from Windows filenames.
   // eslint-disable-next-line no-control-regex
   const stem = basename(source, extname(source)).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').slice(0, 100) || 'photo'
@@ -52,7 +52,7 @@ export async function saveUnique(directory: string, source: string, bytes: Uint8
   let canLink = true
   try {
     for (let i = 0; i < 10_000; i++) {
-      const destination = join(directory, `${stem}_kkumi${i ? `_${i}` : ''}.png`)
+      const destination = join(directory, `${stem}_kkumi${i ? `_${i}` : ''}${extension}`)
       try {
         if (canLink) {
           try { await fs.link(temporary, destination); return destination }

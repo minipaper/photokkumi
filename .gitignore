@@ -9,3 +9,7 @@ test-results/
 *.tmp
 .env*
 .DS_Store
+# Personal library copies and generated library backups
+/stickers/
+/library.json
+PhotoKkumi-library_kkumi*.zip

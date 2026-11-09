@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Stage, Layer, Image as CanvasImage, Transformer, Group } from 'react-konva'
 import type Konva from 'konva'
 import type { Placement } from '../shared/model'
@@ -13,8 +13,9 @@ interface Props {
   disabled: boolean
   onSelect(id: string | null): void
   onChange(id: string, value: Placement): void
+  info?: ReactNode
 }
-export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChange }: Props) {
+export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChange, info }: Props) {
   const area = useRef<HTMLDivElement>(null)
   const images = useRef(new Map<string, Konva.Image>())
   const stage = useRef<Konva.Stage>(null)
@@ -50,15 +51,6 @@ export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChang
     if (!disabled && !panMode && event.target === event.target.getStage()) onSelect(null)
   }
   return <section className="canvas-editor">
-    <div className="view-tools" aria-label="보기 조작">
-      <button disabled={disabled} onClick={() => { setZoom(null); setPan({ x: 0, y: 0 }); setPanMode(false) }}>화면 맞춤</button>
-      <button disabled={disabled} onClick={() => changeZoom(scale / 1.25)} aria-label="축소">−</button>
-      <span data-testid="zoom-level">{Math.round(scale * 100)}%</span>
-      <button disabled={disabled} onClick={() => changeZoom(scale * 1.25)} aria-label="확대">+</button>
-      <button disabled={disabled} onClick={() => changeZoom(1)}>100%</button>
-      <button disabled={disabled} aria-pressed={panMode} onClick={() => setPanMode(!panMode)}>화면 이동</button>
-      <small>Ctrl/Cmd+휠로 확대·축소</small>
-    </div>
     <div ref={area} className="canvas-area" data-testid="canvas-area" tabIndex={0} aria-label="사진 편집 캔버스"
     onMouseDownCapture={() => area.current?.focus({ preventScroll: true })}>
     <div className="canvas-frame" data-testid="canvas-frame" data-scale={scale} data-pan-x={position.x} data-pan-y={position.y} style={{ cursor: panMode ? 'grab' : undefined }}>
@@ -99,5 +91,14 @@ export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChang
       </Stage>
     </div>
   </div>
+    <div className="view-tools" aria-label="보기 조작">
+      <button disabled={disabled} onClick={() => { setZoom(null); setPan({ x: 0, y: 0 }); setPanMode(false) }}>화면 맞춤</button>
+      <button disabled={disabled} onClick={() => changeZoom(scale / 1.25)} aria-label="축소">−</button>
+      <span className="zoom" data-testid="zoom-level" title="Ctrl/Cmd+휠로 확대·축소">{Math.round(scale * 100)}%</span>
+      <button disabled={disabled} onClick={() => changeZoom(scale * 1.25)} aria-label="확대">+</button>
+      <button disabled={disabled} onClick={() => changeZoom(1)}>100%</button>
+      <button disabled={disabled} aria-pressed={panMode} onClick={() => setPanMode(!panMode)}>화면 이동</button>
+      <span className="canvas-info">{info}</span>
+    </div>
   </section>
 }

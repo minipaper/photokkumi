@@ -27,6 +27,8 @@ function App() {
   const outputWrite = useRef<Promise<void>>(Promise.resolve())
   const [outputFolder, setOutputFolder] = useState<string | null>(null)
   const [libraryOpen, setLibraryOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const settingsAnchor = useRef<HTMLDivElement>(null)
   const libraryDialog = useRef<HTMLDialogElement>(null)
   const [photos, setPhotos] = useState<PhotoInfo[]>([])
   const sessions = useRef(new Map<string, PhotoSession>())
@@ -39,7 +41,6 @@ function App() {
   const assets = useRef(new Map<string, DecodedAsset>())
   const scene = history.present
   const placement = scene.stickers.find(item => item.id === scene.selectedId) ?? null
-  const sticker = placement ? assets.current.get(placement.assetId) : null
   const activeSession = photo ? sessions.current.get(photo.id) : undefined
   const referencedAssetsForCurrent = activeSession ? sessionAssets(activeSession) : []
   const referencedIds = [...new Set([...sessions.current.values()].flatMap(sessionAssets))]
@@ -60,6 +61,12 @@ function App() {
       void resolveClose('close').catch(value => setError(String(value)))
     } else if (!closeDialog.current?.open) closeDialog.current?.showModal()
   }, [closeRequest, busy, dirty])
+  useEffect(() => {
+    if (!settingsOpen) return
+    const close = (event: PointerEvent) => { if (!settingsAnchor.current?.contains(event.target as Node)) setSettingsOpen(false) }
+    document.addEventListener('pointerdown', close)
+    return () => document.removeEventListener('pointerdown', close)
+  }, [settingsOpen])
   useEffect(() => { if (libraryOpen && !libraryDialog.current?.open) libraryDialog.current?.showModal() }, [libraryOpen])
   const closeLibrary = () => { if (!operation.current) { libraryDialog.current?.close(); setLibraryOpen(false) } }
   useEffect(() => () => photo?.bitmap.close(), [photo])
@@ -324,6 +331,9 @@ function App() {
   const libraryProps = { items: libraryItems, disabled: busy, canUse: !!photo, activeIds: referencedIds,
     onUse: useSticker, onImport: importStickers, onBackup: backupLibrary, onRestore: restoreLibrary,
     onUpdate: updateSticker, onDelete: deleteSticker }
+  const outputSummary = `${output.format === 'jpg' ? 'JPG' : 'PNG'} · ${output.resizeEnabled ? `${output.resizeBasis === 'width' ? '가로' : '긴 축'} ${output.landscapeSize}/${output.portraitSize}px` : '원본 크기'}`
+  const photoState = (session: PhotoSession) => session.dirty ? (session.saved ? '저장 후 수정' : '수정됨') : session.saved ? (session.outputKey !== outputKey(output) ? '출력 설정 변경' : session.savedFolder !== outputFolder ? '출력 폴더 변경' : '저장 완료') : '미작업'
+  const canSave = !busy && !!photo && outputLoaded && !outputError
   return <main onKeyDown={handleEditorKey}>
     <dialog ref={libraryDialog} className="library-dialog" aria-label="스티커 관리" onCancel={event => { event.preventDefault(); closeLibrary() }}>
       {libraryOpen && <>
@@ -351,81 +361,99 @@ function App() {
         <button disabled={busy} autoFocus onClick={cancelClose}>취소</button>
       </div>
     </dialog>
-    <header><div><h1>포토꾸미</h1><p>사진마다 스티커를 배치하고 저장하세요</p></div><span className="badge">{photo ? `${photoIndex + 1} / ${photos.length}` : '사진 편집'}</span></header>
-    <nav aria-label="파일 작업">
-      <button onClick={choosePhoto} disabled={busy || !!pendingPhoto}>사진 열기</button>
-      <button onClick={choosePhotoFolder} disabled={busy || !!pendingPhoto}>입력 폴더 선택</button>
-      <button onClick={chooseOutputFolder} disabled={busy}>출력 폴더 선택</button>
-      <button onClick={saveNext} disabled={busy || !photo || !outputLoaded || !!outputError}>저장하고 다음</button>
-      <button className="primary" onClick={save} disabled={busy || !photo || !outputLoaded || !!outputError}>{busy ? '처리 중…' : output.format === 'jpg' ? 'JPG로 저장' : 'PNG로 저장'}</button>
-    </nav>
-    <div className="output-folder" title={outputFolder ?? undefined}>출력 폴더: <span data-testid="output-folder">{outputFolder ?? '미지정 · 첫 저장 시 선택'}</span></div>
-    <fieldset className="output-settings" disabled={busy || !outputLoaded} aria-label="출력 설정">
-      <label>형식<select aria-label="출력 형식" value={output.format} onChange={e => setOutput({ ...output, format: e.target.value as 'png' | 'jpg' })}>
-        <option value="png">PNG</option><option value="jpg">JPG</option>
-      </select></label>
-      <label><input type="checkbox" checked={output.resizeEnabled} onChange={e => setOutput({ ...output, resizeEnabled: e.target.checked })} />블로그 크기로 리사이즈</label>
-      <label>기준<select aria-label="리사이즈 기준" disabled={!output.resizeEnabled} value={output.resizeBasis} onChange={e => setOutput({ ...output, resizeBasis: e.target.value as 'width' | 'longEdge' })}>
-        <option value="width">가로 너비</option><option value="longEdge">긴 축</option>
-      </select></label>
-      <label>가로 사진<input aria-label="가로 사진 길이" type="number" min="1" max="8192" disabled={!output.resizeEnabled} value={Number.isFinite(output.landscapeSize) ? output.landscapeSize : ''} onChange={e => setOutput({ ...output, landscapeSize: e.target.valueAsNumber })} />px</label>
-      <label>세로 사진<input aria-label="세로 사진 길이" type="number" min="1" max="8192" disabled={!output.resizeEnabled} value={Number.isFinite(output.portraitSize) ? output.portraitSize : ''} onChange={e => setOutput({ ...output, portraitSize: e.target.valueAsNumber })} />px</label>
-      <label><input type="checkbox" checked={output.preventUpscale} onChange={e => setOutput({ ...output, preventUpscale: e.target.checked })} />확대 방지</label>
-      <label>JPG 품질<input aria-label="JPG 품질" type="number" min="100" max="100" step="1" disabled value={Number.isFinite(output.quality) ? output.quality : ''} readOnly /></label>
-      <span data-testid="output-size">{outputLabel}</span>
-      {outputError && <span role="alert">{outputError}</span>}
-    </fieldset>
+    <header className="toolbar">
+      <h1>포토꾸미</h1>
+      <nav aria-label="파일 작업" className="toolbar-group">
+        <button onClick={choosePhoto} disabled={busy || !!pendingPhoto}>사진 열기</button>
+        <button onClick={choosePhotoFolder} disabled={busy || !!pendingPhoto}>입력 폴더 선택</button>
+      </nav>
+      <div className="toolbar-group" aria-label="편집 이력">
+        <button className="icon" aria-label="실행 취소" title="실행 취소 (Ctrl+Z)" disabled={busy || !history.past.length} onClick={() => applyHistory(undoScene(currentHistory.current))}><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M5.5 3.5 2.5 6.5l3 3"/><path d="M2.5 6.5h7a4 4 0 0 1 0 8H7"/></svg></button>
+        <button className="icon" aria-label="다시 실행" title="다시 실행 (Ctrl+Shift+Z)" disabled={busy || !history.future.length} onClick={() => applyHistory(redoScene(currentHistory.current))}><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="m10.5 3.5 3 3-3 3"/><path d="M13.5 6.5h-7a4 4 0 0 0 0 8H9"/></svg></button>
+      </div>
+      <div className="toolbar-spacer" />
+      <div className="settings-anchor" ref={settingsAnchor}>
+        <button className={`settings-toggle${outputError ? ' invalid' : ''}`} aria-expanded={settingsOpen} aria-controls="output-settings" onClick={() => setSettingsOpen(open => !open)}>
+          저장 설정 <span className="summary">{outputSummary}</span> ▾
+        </button>
+        <div id="output-settings" className="settings-popover" hidden={!settingsOpen} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); setSettingsOpen(false) } }}>
+          <div className="settings-row folder">
+            <span>출력 폴더</span>
+            <span className="folder-name" data-testid="output-folder" title={outputFolder ?? undefined}>{outputFolder ?? '미지정 · 첫 저장 시 선택'}</span>
+            <button onClick={chooseOutputFolder} disabled={busy}>출력 폴더 선택</button>
+          </div>
+          <fieldset className="output-settings" disabled={busy || !outputLoaded} aria-label="출력 설정">
+            <label>형식<select aria-label="출력 형식" value={output.format} onChange={e => setOutput({ ...output, format: e.target.value as 'png' | 'jpg' })}>
+              <option value="png">PNG</option><option value="jpg">JPG</option>
+            </select></label>
+            <label>JPG 품질<input aria-label="JPG 품질" type="number" min="100" max="100" step="1" disabled value={Number.isFinite(output.quality) ? output.quality : ''} readOnly /></label>
+            <label className="check"><input type="checkbox" checked={output.resizeEnabled} onChange={e => setOutput({ ...output, resizeEnabled: e.target.checked })} />블로그 크기로 리사이즈</label>
+            <label>기준<select aria-label="리사이즈 기준" disabled={!output.resizeEnabled} value={output.resizeBasis} onChange={e => setOutput({ ...output, resizeBasis: e.target.value as 'width' | 'longEdge' })}>
+              <option value="width">가로 너비</option><option value="longEdge">긴 축</option>
+            </select></label>
+            <label>가로 사진<span><input aria-label="가로 사진 길이" type="number" min="1" max="8192" disabled={!output.resizeEnabled} value={Number.isFinite(output.landscapeSize) ? output.landscapeSize : ''} onChange={e => setOutput({ ...output, landscapeSize: e.target.valueAsNumber })} /> px</span></label>
+            <label>세로 사진<span><input aria-label="세로 사진 길이" type="number" min="1" max="8192" disabled={!output.resizeEnabled} value={Number.isFinite(output.portraitSize) ? output.portraitSize : ''} onChange={e => setOutput({ ...output, portraitSize: e.target.valueAsNumber })} /> px</span></label>
+            <label className="check"><input type="checkbox" checked={output.preventUpscale} onChange={e => setOutput({ ...output, preventUpscale: e.target.checked })} />확대 방지</label>
+            <div className="settings-result">결과 크기 <strong data-testid="output-size">{outputLabel}</strong></div>
+            {outputError && <p role="alert">{outputError}</p>}
+          </fieldset>
+        </div>
+      </div>
+      <button onClick={save} disabled={!canSave}>{busy ? '처리 중…' : output.format === 'jpg' ? 'JPG로 저장' : 'PNG로 저장'}</button>
+      <button className="primary" onClick={saveNext} disabled={!canSave}>저장하고 다음</button>
+    </header>
     <section className="workspace">
-      {photo ? <EditorCanvas key={photo.id} photo={photo} assets={assets.current} scene={scene} disabled={busy} onSelect={selectInstance} onChange={(id, value) => change(value, id)} />
-        : <div className="empty">사진을 열면 이곳에서 편집할 수 있습니다.<small>사진 여러 장 JPG/PNG · 스티커 PNG · 결과는 JPG/PNG</small></div>}
+      <div className="canvas-column">
+        {photo ? <EditorCanvas key={photo.id} photo={photo} assets={assets.current} scene={scene} disabled={busy} onSelect={selectInstance} onChange={(id, value) => change(value, id)}
+          info={<>{photo.name} · {photo.width} × {photo.height} px{outputLabel && outputLabel !== `${photo.width} × ${photo.height} px` ? ` → ${outputLabel}` : ''} · <b className={dirty ? 'dirty' : ''}>{dirty ? '수정됨' : '원본 / 저장됨'}</b></>} />
+          : <div className="empty"><strong>사진을 열어 시작하세요</strong><span>위의 <b>사진 열기</b> 또는 <b>입력 폴더 선택</b>으로 JPG·PNG 사진을 불러오세요.</span></div>}
+      </div>
       <aside>
-        <button className="manage-library" disabled={busy} onClick={() => setLibraryOpen(true)}>스티커 관리</button>
-        <div hidden={libraryOpen}><LibraryPanel {...libraryProps} mode="pick" /></div>
-        <h2>사진에 붙인 스티커 <span data-testid="instance-count">{scene.stickers.length}</span>/200</h2>
-        <div className="instance-tools">
-          <button disabled={busy || !history.past.length} onClick={() => applyHistory(undoScene(currentHistory.current))}>실행 취소</button>
-          <button disabled={busy || !history.future.length} onClick={() => applyHistory(redoScene(currentHistory.current))}>다시 실행</button>
-          <button disabled={busy || !referencedAssetsForCurrent.length} onClick={clearScene}>배치·이력 비우기</button>
-        </div>
-        <div className="instance-list" aria-label="사진의 스티커 목록">
-          {scene.stickers.map((item, index) => <button key={item.id} disabled={busy}
-            aria-label={`배치 ${index + 1}: ${assets.current.get(item.assetId)?.name ?? '스티커'}`} aria-pressed={scene.selectedId === item.id}
-            onClick={() => selectInstance(item.id)}>{index + 1}. {assets.current.get(item.assetId)?.name ?? '스티커'}</button>)}
-        </div>
-        <div className="instance-tools">
-          <button disabled={busy || !placement} onClick={duplicate}>선택 복제</button>
-          <button disabled={busy || !placement} onClick={() => editScene(removeSelected(currentHistory.current.present))}>선택 삭제</button>
-          <button disabled={busy || !placement || placement.zOrder === 0} onClick={() => editScene(reorderSelected(currentHistory.current.present, -1))}>뒤로</button>
-          <button disabled={busy || !placement || placement.zOrder === scene.stickers.length - 1} onClick={() => editScene(reorderSelected(currentHistory.current.present, 1))}>앞으로</button>
-        </div>
-        <p>스티커를 드래그해 이동하세요. 모서리로 비율을 유지하며 크기를 바꾸고, 위쪽 핸들로 회전하세요. 선택 후 방향키로 1px, Shift+방향키로 10px 이동하고 Delete·Backspace로 삭제합니다.</p>
-        {placement && <fieldset disabled={busy}>
-          <label>중심 X<input aria-label="중심 X" type="number" value={Math.round(placement.x * 100) / 100} onChange={e => change({ ...placement, x: e.target.valueAsNumber })} /></label>
-          <label>중심 Y<input aria-label="중심 Y" type="number" value={Math.round(placement.y * 100) / 100} onChange={e => change({ ...placement, y: e.target.valueAsNumber })} /></label>
-          <label>너비<input aria-label="스티커 너비" type="number" min="1" max="32768" value={Math.round(placement.width * 100) / 100} onChange={e => change({ ...placement, width: e.target.valueAsNumber, height: e.target.valueAsNumber * placement.height / placement.width })} /></label>
-          <label>회전 (°)<input aria-label="회전" type="number" value={Math.round(placement.rotation * 100) / 100} onChange={e => change({ ...placement, rotation: e.target.valueAsNumber })} /></label>
-        </fieldset>}
-        <small>위치와 크기는 원본 픽셀 기준입니다.</small>
-        {photo && <p className="file-info">{photo.name}<br />{photo.width} × {photo.height} px<br />{dirty ? '수정됨' : '원본 / 저장됨'}</p>}
-        {sticker && <p className="file-info">스티커: {sticker.name}</p>}
+        <div className="library-pane" hidden={libraryOpen}><LibraryPanel {...libraryProps} mode="pick" onManage={() => setLibraryOpen(true)} /></div>
+        <section className="placed" aria-label="배치한 스티커">
+          <div className="pane-heading">
+            <h2>배치한 스티커 <small><span data-testid="instance-count">{scene.stickers.length}</span>/200</small></h2>
+            <button className="link" disabled={busy || !referencedAssetsForCurrent.length} onClick={clearScene}>배치·이력 비우기</button>
+          </div>
+          {!!scene.stickers.length && <div className="instance-list" aria-label="사진의 스티커 목록">
+            {scene.stickers.map((item, index) => <button key={item.id} disabled={busy}
+              aria-label={`배치 ${index + 1}: ${assets.current.get(item.assetId)?.name ?? '스티커'}`} aria-pressed={scene.selectedId === item.id}
+              onClick={() => selectInstance(item.id)}>{index + 1}. {assets.current.get(item.assetId)?.name ?? '스티커'}</button>)}
+          </div>}
+          <div className="instance-tools">
+            <button disabled={busy || !placement} onClick={duplicate} title="Ctrl+D">선택 복제</button>
+            <button disabled={busy || !placement} onClick={() => editScene(removeSelected(currentHistory.current.present))} title="Delete">선택 삭제</button>
+            <button disabled={busy || !placement || placement.zOrder === 0} onClick={() => editScene(reorderSelected(currentHistory.current.present, -1))}>뒤로</button>
+            <button disabled={busy || !placement || placement.zOrder === scene.stickers.length - 1} onClick={() => editScene(reorderSelected(currentHistory.current.present, 1))}>앞으로</button>
+          </div>
+          {placement ? <fieldset className="placement-fields" disabled={busy} title="원본 픽셀 기준">
+            <label>X<input aria-label="중심 X" type="number" value={Math.round(placement.x * 100) / 100} onChange={e => change({ ...placement, x: e.target.valueAsNumber })} /></label>
+            <label>Y<input aria-label="중심 Y" type="number" value={Math.round(placement.y * 100) / 100} onChange={e => change({ ...placement, y: e.target.valueAsNumber })} /></label>
+            <label>너비<input aria-label="스티커 너비" type="number" min="1" max="32768" value={Math.round(placement.width * 100) / 100} onChange={e => change({ ...placement, width: e.target.valueAsNumber, height: e.target.valueAsNumber * placement.height / placement.width })} /></label>
+            <label>회전<input aria-label="회전" type="number" value={Math.round(placement.rotation * 100) / 100} onChange={e => change({ ...placement, rotation: e.target.valueAsNumber })} /></label>
+          </fieldset> : <p className="hint">{photo ? '스티커를 클릭해 선택하면 위치·크기·회전을 조정할 수 있습니다. 방향키 1px, Shift+방향키 10px 이동.' : '사진을 열고 위 라이브러리에서 스티커를 누르면 배치됩니다.'}</p>}
+        </section>
       </aside>
     </section>
-      {!!photos.length && <section className="photo-list" aria-label="사진 목록">
-        <h2>사진 {photoIndex + 1} / {photos.length}</h2>
-        <div className="photo-navigation">
-          <button disabled={busy || photoIndex <= 0} onClick={() => requestPhoto(photos[photoIndex - 1].id)}>이전 사진</button>
-          <button disabled={busy || photoIndex >= photos.length - 1} onClick={() => requestPhoto(photos[photoIndex + 1].id)}>다음 사진</button>
-        </div>
+    {!!photos.length && <section className="photo-list" aria-label="사진 목록">
+      <div className="photo-nav">
+        <button className="icon nav" aria-label="이전 사진" disabled={busy || photoIndex <= 0} onClick={() => requestPhoto(photos[photoIndex - 1].id)}>‹</button>
+        <h2>{photoIndex + 1} / {photos.length}</h2>
+        <button className="icon nav" aria-label="다음 사진" disabled={busy || photoIndex >= photos.length - 1} onClick={() => requestPhoto(photos[photoIndex + 1].id)}>›</button>
+      </div>
+      <div className="photo-strip">
         {photos.map((item, index) => {
           const session = sessions.current.get(item.id)!
-          return <button key={item.id} className="photo-item" disabled={busy} aria-label={`사진 ${index + 1}: ${item.name}`} aria-pressed={photo?.id === item.id} onClick={() => requestPhoto(item.id)}>
+          const state = photoState(session)
+          return <button key={item.id} className="photo-item" data-state={state} disabled={busy} aria-label={`사진 ${index + 1}: ${item.name}`} aria-pressed={photo?.id === item.id} onClick={() => requestPhoto(item.id)} title={`${item.name} · ${state}`}>
             <img src={item.thumbnail} alt="" width="80" height="60" loading="lazy" />
             <span>{index + 1}. {item.name}</span>
-            <small>{session.dirty ? (session.saved ? '저장 후 수정' : '수정됨') : session.saved ? (session.outputKey !== outputKey(output) ? '출력 설정 변경' : session.savedFolder !== outputFolder ? '출력 폴더 변경' : '저장 완료') : '미작업'}</small>
+            <small>{state}</small>
           </button>
         })}
-      </section>}
-    <footer><p role="status" aria-live="polite">{status}</p>{error && !libraryOpen && !pendingPhoto && <p role="alert">{error}</p>}<small>원본은 바꾸지 않습니다. 새 JPG/PNG 파일로 저장합니다. 사진별 편집은 앱을 닫으면 사라집니다. 저장한 결과와 스티커 라이브러리는 유지됩니다.</small></footer>
+      </div>
+    </section>}
+    <footer className="statusbar"><p role="status" aria-live="polite">{status}</p>{error && !libraryOpen && !pendingPhoto && <p role="alert">{error}</p>}</footer>
   </main>
 }
 createRoot(document.getElementById('root')!).render(<App />)

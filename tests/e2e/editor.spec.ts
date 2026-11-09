@@ -22,6 +22,10 @@ async function select(path: string | string[] | null) {
     dialog.showOpenDialog = async () => ({ canceled: selected === null, filePaths: selected ? (Array.isArray(selected) ? selected : [selected]) : [] })
   }, path)
 }
+async function settings() {
+  const toggle = page.getByRole('button', { name: /^저장 설정/ })
+  if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click()
+}
 async function field(name: string, value: number) { await page.getByRole('spinbutton', { name, exact: true }).fill(String(value)) }
 async function value(name: string) { return Number(await page.getByRole('spinbutton', { name, exact: true }).inputValue()) }
 async function output(name = '한글 사진_kkumi.png') { return PNG.sync.read(await readFile(join(directory, name))) }
@@ -207,9 +211,9 @@ test('EXIF 회전 JPG를 한 번만 회전하고 메타데이터 없이 저장�
   const bytes = await readFile(join(directory, '방향_kkumi.png'))
   expect(bytes.includes(Buffer.from('eXIf'))).toBe(false)
   expect(bytes.includes(Buffer.from('Exif'))).toBe(false)
-  await page.getByRole('combobox', { name: '출력 형식', exact: true }).selectOption('jpg')
-  await page.getByRole('checkbox', { name: '블로그 크기로 리사이즈', exact: true }).check()
-  await field('세로 사진 길이', 20)
+  await settings(); await page.getByRole('combobox', { name: '출력 형식', exact: true }).selectOption('jpg')
+  await settings(); await page.getByRole('checkbox', { name: '블로그 크기로 리사이즈', exact: true }).check()
+  await settings(); await field('세로 사진 길이', 20)
   await select(directory); await page.getByRole('button', { name: 'JPG로 저장' }).click()
   await expect(page.getByRole('status')).toContainText('저장 완료')
   const jpgBytes = await readFile(join(directory, '방향_kkumi.jpg'))
@@ -696,9 +700,9 @@ test('사진 전환의 저장 실패·취소 및 대상 읽기 실패는 현재 
 test('출력 너비·확대 방지·회전 좌표와 PNG 크기 및 입력 경계를 검증한다', async () => {
   await load()
   await field('중심 X', 400); await field('중심 Y', 300); await field('스티커 너비', 160); await field('회전', 90)
-  await expect(page.getByRole('spinbutton', { name: 'JPG 품질', exact: true })).toBeDisabled()
-  await page.getByRole('checkbox', { name: '블로그 크기로 리사이즈', exact: true }).check()
-  await field('가로 사진 길이', 600)
+  await settings(); await expect(page.getByRole('spinbutton', { name: 'JPG 품질', exact: true })).toBeDisabled()
+  await settings(); await page.getByRole('checkbox', { name: '블로그 크기로 리사이즈', exact: true }).check()
+  await settings(); await field('가로 사진 길이', 600)
   await expect(page.getByTestId('output-size')).toHaveText('600 × 400 px')
   await save()
   const reduced = await output()
@@ -714,24 +718,24 @@ test('출력 너비·확대 방지·회전 좌표와 PNG 크기 및 입력 경�
   expect(mismatch.ok).toBe(false)
   if (!mismatch.ok) expect(mismatch.error).toContain('출력 크기')
   expect((await page.evaluate(() => window.photokkumi.updateOutputSettings({ format: 'png', resizeEnabled: true, resizeBasis: 'width', landscapeSize: 0, portraitSize: 900, preventUpscale: true, quality: 100 }))).ok).toBe(false)
-  await field('가로 사진 길이', 2400)
+  await settings(); await field('가로 사진 길이', 2400)
   await expect(page.getByTestId('output-size')).toHaveText('1200 × 800 px')
   await save()
   expect((await output('한글 사진_kkumi_1.png')).width).toBe(1200)
-  await page.getByRole('checkbox', { name: '확대 방지', exact: true }).uncheck()
+  await settings(); await page.getByRole('checkbox', { name: '확대 방지', exact: true }).uncheck()
   await expect(page.getByTestId('output-size')).toHaveText('2400 × 1600 px')
   await save()
   const enlarged = await output('한글 사진_kkumi_2.png')
   expect([enlarged.width, enlarged.height]).toEqual([2400, 1600])
   expect(pixel(enlarged, 840, 540)).toEqual([255, 0, 0, 255])
   for (const invalid of ['0', '-1', '1.5', '8193', '']) {
-    await page.getByRole('spinbutton', { name: '가로 사진 길이', exact: true }).fill(invalid)
+    await settings(); await page.getByRole('spinbutton', { name: '가로 사진 길이', exact: true }).fill(invalid)
     await expect(page.getByRole('button', { name: 'PNG로 저장' })).toBeDisabled()
     await expect(page.getByRole('alert')).toBeVisible()
   }
-  await field('가로 사진 길이', 8000)
+  await settings(); await field('가로 사진 길이', 8000)
   await expect(page.getByRole('alert')).toContainText('1,600만')
-  await page.getByRole('checkbox', { name: '블로그 크기로 리사이즈', exact: true }).uncheck()
+  await settings(); await page.getByRole('checkbox', { name: '블로그 크기로 리사이즈', exact: true }).uncheck()
   await expect(page.getByRole('button', { name: 'PNG로 저장' })).toBeEnabled()
 })
 
@@ -752,13 +756,13 @@ test('투명 PNG와 반투명 스티커는 PNG 알파와 JPG 흰 배경·품질 
   }), { id: infos.value[0].id, bytes: [...original] })
   expect(transparentJpg.ok).toBe(false)
   if (!transparentJpg.ok) expect(transparentJpg.error).toContain('흰색 배경')
-  await page.getByRole('combobox', { name: '출력 형식', exact: true }).selectOption('jpg')
-  await expect(page.getByRole('spinbutton', { name: 'JPG 품질', exact: true })).toBeDisabled()
-  await expect(page.getByRole('spinbutton', { name: 'JPG 품질', exact: true })).toHaveValue('100')
+  await settings(); await page.getByRole('combobox', { name: '출력 형식', exact: true }).selectOption('jpg')
+  await settings(); await expect(page.getByRole('spinbutton', { name: 'JPG 품질', exact: true })).toBeDisabled()
+  await settings(); await expect(page.getByRole('spinbutton', { name: 'JPG 품질', exact: true })).toHaveValue('100')
   const row = page.getByRole('button', { name: '사진 1: 한글 사진.png', exact: true })
   await expect(row).toContainText('출력 설정 변경')
   const folder = await page.getByTestId('output-folder').textContent()
-  await select(null); await page.getByRole('button', { name: '출력 폴더 선택' }).click()
+  await settings(); await select(null); await page.getByRole('button', { name: '출력 폴더 선택' }).click()
   await expect(page.getByTestId('output-folder')).toHaveText(folder!)
   await failNextOutput(); await page.getByRole('button', { name: 'JPG로 저장' }).click()
   await expect(page.getByRole('alert')).toContainText('저장하지 못했습니다')
@@ -778,21 +782,21 @@ test('투명 PNG와 반투명 스티커는 PNG 알파와 JPG 흰 배경·품질 
   expect((await readFile(join(directory, '한글 사진_kkumi_1.jpg'))).length).toBeGreaterThan(0)
   expect(await readFile(source)).toEqual(original)
   expect((await page.evaluate(() => window.photokkumi.updateOutputSettings({ format: 'jpg', resizeEnabled: false, resizeBasis: 'width', landscapeSize: 1600, portraitSize: 900, preventUpscale: true, quality: 90 }))).ok).toBe(false)
-  await page.getByRole('checkbox', { name: '블로그 크기로 리사이즈', exact: true }).check()
-  await field('가로 사진 길이', 200)
+  await settings(); await page.getByRole('checkbox', { name: '블로그 크기로 리사이즈', exact: true }).check()
+  await settings(); await field('가로 사진 길이', 200)
   await expect.poll(async () => {
     const settings = await page.evaluate(() => window.photokkumi.getOutputSettings())
     return settings.ok ? settings.value.landscapeSize : null
   }).toBe(200)
   await restartWithLibrary()
-  await expect(page.getByRole('combobox', { name: '출력 형식', exact: true })).toHaveValue('jpg')
-  await expect(page.getByRole('spinbutton', { name: 'JPG 품질', exact: true })).toHaveValue('100')
-  await expect(page.getByRole('spinbutton', { name: '가로 사진 길이', exact: true })).toHaveValue('200')
+  await settings(); await expect(page.getByRole('combobox', { name: '출력 형식', exact: true })).toHaveValue('jpg')
+  await settings(); await expect(page.getByRole('spinbutton', { name: 'JPG 품질', exact: true })).toHaveValue('100')
+  await settings(); await expect(page.getByRole('spinbutton', { name: '가로 사진 길이', exact: true })).toHaveValue('200')
 })
 
 test('출력 설정 쓰기 실패는 기존 설정과 편집을 보존하고 버리기로 종료할 수 있다', async () => {
   await load(); await field('회전', 25)
-  await page.getByRole('combobox', { name: '출력 형식', exact: true }).selectOption('jpg')
+  await settings(); await page.getByRole('combobox', { name: '출력 형식', exact: true }).selectOption('jpg')
   await expect.poll(async () => {
     const result = await page.evaluate(() => window.photokkumi.getOutputSettings())
     return result.ok ? result.value.format : ''
@@ -807,7 +811,7 @@ test('출력 설정 쓰기 실패는 기존 설정과 편집을 보존하고 버
       return rename(...args)
     }
   })
-  await page.getByRole('checkbox', { name: '확대 방지', exact: true }).uncheck()
+  await settings(); await page.getByRole('checkbox', { name: '확대 방지', exact: true }).uncheck()
   await expect(page.getByRole('alert')).toContainText('출력 설정')
   expect(await readFile(path)).toEqual(before)
   await select(directory); await page.getByRole('button', { name: '저장하고 다음' }).click()
@@ -847,13 +851,13 @@ test('입력 폴더·하단 썸네일·출력 폴더 재사용과 방향별 블�
   await expect(first).toHaveAttribute('aria-pressed', 'true')
   await register(stickerPath)
   await page.getByRole('button', { name: '투명 스티커 배치', exact: true }).click()
-  await select(target); await page.getByRole('button', { name: '출력 폴더 선택' }).click()
+  await settings(); await select(target); await page.getByRole('button', { name: '출력 폴더 선택' }).click()
   await expect(page.getByTestId('output-folder')).toContainText('결과')
-  await select(null); await page.getByRole('button', { name: '출력 폴더 선택' }).click()
+  await settings(); await select(null); await page.getByRole('button', { name: '출력 폴더 선택' }).click()
   await expect(page.getByTestId('output-folder')).toContainText('결과')
-  await page.getByRole('checkbox', { name: '블로그 크기로 리사이즈' }).check()
-  await expect(page.getByRole('spinbutton', { name: '가로 사진 길이' })).toHaveValue('1600')
-  await expect(page.getByRole('spinbutton', { name: '세로 사진 길이' })).toHaveValue('900')
+  await settings(); await page.getByRole('checkbox', { name: '블로그 크기로 리사이즈' }).check()
+  await settings(); await expect(page.getByRole('spinbutton', { name: '가로 사진 길이' })).toHaveValue('1600')
+  await settings(); await expect(page.getByRole('spinbutton', { name: '세로 사진 길이' })).toHaveValue('900')
   await expect(page.getByTestId('output-size')).toHaveText('1600 × 1018 px')
   await app.evaluate(({ dialog }) => { dialog.showOpenDialog = async () => { throw new Error('추가 폴더 선택 금지') } })
   await page.getByRole('button', { name: '저장하고 다음' }).click()
@@ -867,14 +871,14 @@ test('입력 폴더·하단 썸네일·출력 폴더 재사용과 방향별 블�
   const portrait = PNG.sync.read(await readFile(join(target, '세로_kkumi.png')))
   expect([landscape.width, landscape.height]).toEqual([1600, 1018])
   expect([portrait.width, portrait.height]).toEqual([900, 1414])
-  await page.getByRole('combobox', { name: '리사이즈 기준' }).selectOption('longEdge')
+  await settings(); await page.getByRole('combobox', { name: '리사이즈 기준' }).selectOption('longEdge')
   await expect(page.getByTestId('output-size')).toHaveText('573 × 900 px')
   await page.getByRole('button', { name: 'PNG로 저장' }).click()
   await expect(page.getByRole('status')).toContainText('저장 완료')
   const long = PNG.sync.read(await readFile(join(target, '세로_kkumi_1.png')))
   expect([long.width, long.height]).toEqual([573, 900])
   const newTarget = join(directory, '결과2'); await fs.mkdir(newTarget)
-  await select(newTarget); await page.getByRole('button', { name: '출력 폴더 선택' }).click()
+  await settings(); await select(newTarget); await page.getByRole('button', { name: '출력 폴더 선택' }).click()
   await expect(second).toContainText('출력 폴더 변경')
   await page.getByRole('button', { name: '저장하고 다음' }).click()
   await expect(page.getByRole('status')).toContainText('작업이 완료')
@@ -934,4 +938,32 @@ test('확대·화면 이동은 저장 좌표를 바꾸지 않고 단축키와 �
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(760, 580))
   await expect.poll(async () => (await page.getByTestId('canvas-area').boundingBox())!.height).toBeGreaterThan(80)
   await page.screenshot({ path: test.info().outputPath('minimum-window.png') })
+})
+
+test('최소 창 크기에서도 페이지·우측 패널은 스크롤하지 않고 스티커 목록만 스크롤한다', async () => {
+  const paths = []
+  for (let index = 0; index < 18; index++) {
+    const path = join(directory, `도형${index}.png`)
+    await writeFile(path, makePng(30, 30, () => [index * 12, 100, 200 - index * 8, 255]))
+    paths.push(path)
+  }
+  await select(source); await page.getByRole('button', { name: '사진 열기', exact: true }).click()
+  await register(paths)
+  await page.getByRole('button', { name: '도형0 배치', exact: true }).click()
+  await expect(page.getByRole('spinbutton', { name: '스티커 너비' })).toBeVisible()
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(760, 580))
+  await expect.poll(() => page.evaluate(() => window.innerHeight)).toBe(580)
+  const layout = await page.evaluate(() => {
+    const overflow = (element: Element | null) => !!element && element.scrollHeight > element.clientHeight + 1
+    const toolbar = document.querySelector('.toolbar')!.getBoundingClientRect()
+    return {
+      page: document.documentElement.scrollHeight > window.innerHeight || document.documentElement.scrollWidth > window.innerWidth,
+      aside: overflow(document.querySelector('aside')), grid: overflow(document.querySelector('aside .sticker-grid')),
+      toolbarHeight: toolbar.height, canvas: document.querySelector('[data-testid=canvas-area]')!.getBoundingClientRect().height
+    }
+  })
+  expect(layout).toMatchObject({ page: false, aside: false, grid: true })
+  expect(layout.toolbarHeight).toBeLessThanOrEqual(52)
+  expect(layout.canvas).toBeGreaterThan(250)
+  await expect(page.getByRole('spinbutton', { name: '스티커 너비' })).toBeInViewport()
 })

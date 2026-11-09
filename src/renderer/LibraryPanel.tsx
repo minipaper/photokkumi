@@ -8,6 +8,7 @@ interface Props {
   onRestore(): void
   onUpdate(id: string, metadata: StickerMetadata): Promise<boolean>
   onDelete(id: string): Promise<boolean>
+  onManage?(): void
 }
 export function LibraryPanel(props: Props) {
   const [category, setCategory] = useState('')
@@ -17,26 +18,31 @@ export function LibraryPanel(props: Props) {
   const selectedCategory = props.items.some(item => item.category === category) ? category : ''
   const filtered = props.items.filter(item => (!selectedCategory || item.category === selectedCategory) && (!favorites || item.favorite))
   return <section className="library" aria-label={props.mode === 'manage' ? '스티커 관리 목록' : '스티커 라이브러리'}>
-    <h2>{props.mode === 'manage' ? '스티커 관리' : '스티커 라이브러리'} <small>{props.items.length}/100</small></h2>
+    <div className="pane-heading">
+      <h2>{props.mode === 'manage' ? '스티커 관리' : '스티커 라이브러리'} <small>{props.items.length}/100</small></h2>
+      {props.onManage && <button disabled={props.disabled} onClick={props.onManage}>스티커 관리</button>}
+    </div>
     {props.mode === 'manage' && <div className="library-tools">
       <button disabled={props.disabled} onClick={props.onImport}>PNG 등록</button>
       <button disabled={props.disabled || !props.items.length} onClick={props.onBackup}>백업</button>
       <button disabled={props.disabled} onClick={props.onRestore}>복원</button>
     </div>}
+    <div className="library-filter">
     <label>분류<select aria-label="분류 필터" value={selectedCategory} onChange={event => setCategory(event.target.value)}>
       <option value="">전체</option>
       {[...new Set(props.items.map(item => item.category).filter(Boolean))].sort().map(name => <option key={name}>{name}</option>)}
     </select></label>
     <label className="checkbox"><input type="checkbox" checked={favorites} onChange={event => setFavorites(event.target.checked)} />즐겨찾기만</label>
+    </div>
     {!props.items.length && <p>스티커 관리에서 PNG를 등록하세요. 등록한 스티커는 다음 실행에도 유지됩니다.</p>}
     {!!props.items.length && !filtered.length && <p>조건에 맞는 스티커가 없습니다.</p>}
     <div className="sticker-grid">
       {filtered.map(item => <article key={item.id} aria-label={`스티커 ${item.name}`}>
         {props.mode === 'pick' ? <button className="sticker-use" aria-label={`${item.name} 배치`} disabled={props.disabled || !props.canUse} onClick={() => props.onUse(item.id)}>
-          <img loading="lazy" src={`app://bundle/stickers/${item.id}.png`} alt={item.name} width="64" height="64" />
-          <span>{item.name}</span>
+          <img loading="lazy" src={`app://bundle/stickers/${item.id}.png`} alt={item.name} width="56" height="56" />
+          <span title={item.name}>{item.name}</span>
         </button> : <div className="sticker-use"><img src={`app://bundle/stickers/${item.id}.png`} alt={item.name} width="64" height="64" /><span>{item.name}</span></div>}
-        <small>{item.category || '미분류'}</small>
+        {props.mode === 'manage' && <small>{item.category || '미분류'}</small>}
         {props.mode === 'manage' && <div className="sticker-actions">
           <button aria-label={`${item.name} 즐겨찾기`} aria-pressed={item.favorite} disabled={props.disabled} onClick={() => { void props.onUpdate(item.id, { name: item.name, category: item.category, favorite: !item.favorite }) }}>{item.favorite ? '★' : '☆'}</button>
           <button aria-label={`${item.name} 정보 편집`} disabled={props.disabled} onClick={() => setEditing({ ...item })}>편집</button>
@@ -57,6 +63,6 @@ export function LibraryPanel(props: Props) {
       <button disabled={props.disabled} onClick={async () => { if (await props.onDelete(deleting.id)) setDeleting(null) }}>삭제 확인</button>
       <button disabled={props.disabled} onClick={() => setDeleting(null)}>삭제 취소</button>
     </div>}
-    <small>{props.mode === 'pick' ? '스티커를 누를 때마다 사진에 추가합니다.' : '모든 사진의 배치·실행취소 이력·마지막 저장 상태에서 사용 중인 파일은 삭제할 수 없습니다.'}</small>
+    {props.mode === 'manage' && <small>모든 사진의 배치·실행취소 이력·마지막 저장 상태에서 사용 중인 파일은 삭제할 수 없습니다.</small>}
   </section>
 }

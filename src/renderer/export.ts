@@ -1,10 +1,20 @@
 import { DEFAULT_OUTPUT, outputSize, type OutputSettings } from '../shared/output'
 import type { BlurRegion, StickerInstance } from '../shared/model'
-import { buildRegionPatch, ellipsePath } from './regions'
+import { buildRegionPatch, regionPath } from './regions'
 import { renderAdjusted, releaseCanvas } from './filters'
 import { NEUTRAL_ADJUSTMENTS, type Adjustments } from '../shared/filters'
+/** PNG encoding runs in a worker: main-thread canvas encoding waits for idle time and stalled saves for seconds when the window was behind. */
+function encodePng(bitmap: ImageBitmap): Promise<Uint8Array> {
+  const worker = new Worker(new URL('./encode-worker.ts', import.meta.url), { type: 'module' })
+  return new Promise((resolve, reject) => {
+    const fail = () => { worker.terminate(); reject(new Error('PNG 인코딩에 실패했습니다.')) }
+    worker.onmessage = (event: MessageEvent<{ buffer?: ArrayBuffer }>) => { if (!event.data.buffer) { fail(); return } worker.terminate(); resolve(new Uint8Array(event.data.buffer)) }
+    worker.onerror = fail
+    worker.postMessage({ bitmap }, [bitmap])
+  })
+}
 export async function composePng(photo: ImageBitmap, instances: StickerInstance[], assets: ReadonlyMap<string, { bitmap: ImageBitmap }>, output: OutputSettings = DEFAULT_OUTPUT, regions: BlurRegion[] = [], adjust: Adjustments = NEUTRAL_ADJUSTMENTS): Promise<Uint8Array> {
-  const canvas = document.createElement('canvas')
+  const canvas = new OffscreenCanvas(1, 1)
   // Order: adjustments → blur/mosaic (hides adjusted pixels) → stickers (never adjusted).
   const adjusted = renderAdjusted(photo, adjust)
   const base = adjusted ?? photo
@@ -24,7 +34,7 @@ export async function composePng(photo: ImageBitmap, instances: StickerInstance[
       const patch = buildRegionPatch(base, region)
       if (!patch) continue
       context.save()
-      ellipsePath(context, region); context.clip()
+      regionPath(context, region); context.clip()
       context.drawImage(patch.canvas, patch.bounds.x, patch.bounds.y)
       context.restore()
       patch.canvas.width = 0; patch.canvas.height = 0
@@ -38,9 +48,6 @@ export async function composePng(photo: ImageBitmap, instances: StickerInstance[
       context.drawImage(sticker, -placement.width / 2, -placement.height / 2, placement.width, placement.height)
       context.restore()
     }
-    const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(
-      value => value ? resolve(value) : reject(new Error('PNG 인코딩에 실패했습니다.')), 'image/png'
-    ))
-    return new Uint8Array(await blob.arrayBuffer())
+    return await encodePng(canvas.transferToImageBitmap())
   } finally { canvas.width = 0; canvas.height = 0; releaseCanvas(adjusted) }
 }

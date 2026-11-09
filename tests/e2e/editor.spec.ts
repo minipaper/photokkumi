@@ -36,9 +36,16 @@ async function field(name: string, value: number) { if (placementFields.includes
 async function value(name: string) { if (placementFields.includes(name)) await openFields(); return Number(await page.getByRole('spinbutton', { name, exact: true }).inputValue()) }
 async function output(name = '한글 사진_kkumi.png') { return PNG.sync.read(await readFile(join(directory, name))) }
 function pixel(image: PNG, x: number, y: number) { return [...image.data.subarray((image.width * y + x) * 4, (image.width * y + x) * 4 + 4)] }
+/** Saves in place (no move) with Ctrl/Cmd+S once saving is allowed. */
+async function saveKey() {
+  await expect(page.getByRole('button', { name: '저장하고 다음' })).toBeEnabled()
+  // The shortcut is ignored while a dialog (close/switch confirmation) is still open.
+  await expect(page.locator('dialog[open]')).toHaveCount(0)
+  await page.keyboard.press('ControlOrMeta+s')
+}
 async function save() {
   await select(directory)
-  await page.getByRole('button', { name: 'PNG로 저장' }).click()
+  await saveKey()
   await expect(page.getByRole('status')).toContainText('저장 완료')
 }
 async function openManager() {
@@ -57,7 +64,7 @@ async function register(paths: string | string[] | null) {
 }
 async function load() {
   await select(source); await page.getByRole('button', { name: '사진 열기', exact: true }).click()
-  await expect(page.getByRole('button', { name: 'PNG로 저장' })).toBeEnabled()
+  await expect(page.getByRole('button', { name: '저장하고 다음' })).toBeEnabled()
   await register(stickerPath)
   await page.getByRole('button', { name: '투명 스티커 배치', exact: true }).click()
   await openFields()
@@ -164,11 +171,11 @@ test('저장 실패·취소와 스티커 선택 취소가 편집을 보존하고
   await load(); await field('회전', 35)
   await register(null)
   await expect(page.getByRole('spinbutton', { name: '회전', exact: true })).toHaveValue('35')
-  await select(null); await page.getByRole('button', { name: 'PNG로 저장' }).click()
+  await select(null); await saveKey()
   await expect(page.getByRole('status')).toContainText('취소')
   expect((await readdir(directory)).filter(x => x.includes('_kkumi'))).toEqual([])
   await select(join(directory, 'missing', 'directory'))
-  await page.getByRole('button', { name: 'PNG로 저장' }).click()
+  await saveKey()
   await expect(page.getByRole('alert')).toContainText('저장하지 못했습니다')
   await expect(page.getByRole('spinbutton', { name: '회전', exact: true })).toHaveValue('35')
   await save()
@@ -216,7 +223,7 @@ test('EXIF 회전 JPG를 한 번만 회전하고 메타데이터 없이 저장�
   source = join(directory, '방향.jpg')
   await writeFile(source, Buffer.concat([encoded.subarray(0, 2), header, exif, encoded.subarray(2)]))
   await select(source); await page.getByRole('button', { name: '사진 열기', exact: true }).click()
-  await expect(page.getByRole('button', { name: 'PNG로 저장' })).toBeEnabled()
+  await expect(page.getByRole('button', { name: '저장하고 다음' })).toBeEnabled()
   await expect.poll(() => page.locator('.photo-item img').evaluate(image => [(image as HTMLImageElement).naturalWidth, (image as HTMLImageElement).naturalHeight])).toEqual([40, 60])
   await save()
   const result = await output('방향_kkumi.png')
@@ -229,7 +236,7 @@ test('EXIF 회전 JPG를 한 번만 회전하고 메타데이터 없이 저장�
   await settings(); await page.getByRole('combobox', { name: '출력 형식', exact: true }).selectOption('jpg')
   await settings(); await page.getByRole('checkbox', { name: '블로그 크기로 리사이즈', exact: true }).check()
   await settings(); await field('세로 사진 길이', 20)
-  await select(directory); await page.getByRole('button', { name: 'JPG로 저장' }).click()
+  await select(directory); await saveKey()
   await expect(page.getByRole('status')).toContainText('저장 완료')
   const jpgBytes = await readFile(join(directory, '방향_kkumi.jpg'))
   const resized = jpeg.decode(jpgBytes)
@@ -301,7 +308,7 @@ test('하드 링크 미지원 + 중간 쓰기 실패는 출력 정리와 편집�
       return handle
     }
   })
-  await select(directory); await page.getByRole('button', { name: 'PNG로 저장' }).click()
+  await select(directory); await saveKey()
   await expect(page.getByRole('alert')).toContainText('저장하지 못했습니다')
   expect((await readdir(directory)).filter(x => x.includes('_kkumi') || x.endsWith('.tmp'))).toEqual([])
   await expect(page.getByRole('spinbutton', { name: '회전', exact: true })).toHaveValue('25')
@@ -315,7 +322,7 @@ test('저장된 편집은 확인 없이 닫고, 저장 중 닫기는 작업이 �
       setTimeout(() => resolve({ canceled: true, filePaths: [selected] }), 500)
     })
   }, directory)
-  await page.getByRole('button', { name: 'PNG로 저장' }).click()
+  await saveKey()
   await expect(page.getByRole('button', { name: '처리 중…' })).toBeVisible()
   await requestClose()
   expect(page.isClosed()).toBe(false)
@@ -558,7 +565,7 @@ test('동일 스티커 여러 개와 다른 스티커는 독립 편집·겹침·
   await expect(page.getByRole('spinbutton', { name: '중심 X', exact: true })).toHaveValue('200')
   await expect(page.getByRole('spinbutton', { name: '회전', exact: true })).toHaveValue('90')
   await failNextOutput()
-  await page.getByRole('button', { name: 'PNG로 저장' }).click()
+  await saveKey()
   await expect(page.getByRole('alert')).toContainText('저장하지 못했습니다')
   await expect(count).toHaveText('4')
   await requestClose()
@@ -746,13 +753,13 @@ test('출력 너비·확대 방지·회전 좌표와 PNG 크기 및 입력 경�
   expect(pixel(enlarged, 840, 540)).toEqual([255, 0, 0, 255])
   for (const invalid of ['0', '-1', '1.5', '8193', '']) {
     await settings(); await page.getByRole('spinbutton', { name: '가로 사진 길이', exact: true }).fill(invalid)
-    await expect(page.getByRole('button', { name: 'PNG로 저장' })).toBeDisabled()
+    await expect(page.getByRole('button', { name: '저장하고 다음' })).toBeDisabled()
     await expect(page.getByRole('alert')).toBeVisible()
   }
   await settings(); await field('가로 사진 길이', 8000)
   await expect(page.getByRole('alert')).toContainText('1,600만')
   await settings(); await page.getByRole('checkbox', { name: '블로그 크기로 리사이즈', exact: true }).uncheck()
-  await expect(page.getByRole('button', { name: 'PNG로 저장' })).toBeEnabled()
+  await expect(page.getByRole('button', { name: '저장하고 다음' })).toBeEnabled()
 })
 
 test('투명 PNG와 반투명 스티커는 PNG 알파와 JPG 흰 배경·품질 100·충돌을 보존한다', async () => {
@@ -780,7 +787,7 @@ test('투명 PNG와 반투명 스티커는 PNG 알파와 JPG 흰 배경·품질 
   const folder = await page.getByTestId('output-folder').textContent()
   await settings(); await select(null); await page.getByRole('button', { name: '출력 폴더 선택' }).click()
   await expect(page.getByTestId('output-folder')).toHaveText(folder!)
-  await failNextOutput(); await page.getByRole('button', { name: 'JPG로 저장' }).click()
+  await failNextOutput(); await saveKey()
   await expect(page.getByRole('alert')).toContainText('저장하지 못했습니다')
   await select(directory); await page.getByRole('button', { name: '저장하고 다음' }).click()
   await expect(page.getByRole('status')).toContainText('작업이 완료')
@@ -792,7 +799,7 @@ test('투명 PNG와 반투명 스티커는 PNG 알파와 JPG 흰 배경·품질 
   expect(center[0]).toBeGreaterThan(245); expect(center[1]).toBeGreaterThan(115); expect(center[1]).toBeLessThan(140)
   expect(bytes.includes(Buffer.from('Exif'))).toBe(false)
   expect(bytes.includes(Buffer.from('GPS'))).toBe(false)
-  await select(directory); await page.getByRole('button', { name: 'JPG로 저장' }).click()
+  await select(directory); await saveKey()
   await expect(page.getByRole('status')).toContainText('저장 완료')
   expect(await readFile(join(directory, '한글 사진_kkumi.jpg'))).toEqual(bytes)
   expect((await readFile(join(directory, '한글 사진_kkumi_1.jpg'))).length).toBeGreaterThan(0)
@@ -831,7 +838,7 @@ test('출력 설정 쓰기 실패는 기존 설정과 편집을 보존하고 버
   await expect(page.getByRole('alert')).toContainText('출력 설정')
   expect(await readFile(path)).toEqual(before)
   await select(directory); await page.getByRole('button', { name: '저장하고 다음' }).click()
-  await expect(page.getByRole('button', { name: 'JPG로 저장' })).toBeEnabled()
+  await expect(page.getByRole('button', { name: '저장하고 다음' })).toBeEnabled()
   await expect(page.getByRole('alert')).toContainText('출력 설정')
   expect(await value('회전')).toBe(25)
   expect((await readdir(directory)).some(name => name.includes('_kkumi'))).toBe(false)
@@ -889,7 +896,7 @@ test('입력 폴더·하단 썸네일·출력 폴더 재사용과 방향별 블�
   expect([portrait.width, portrait.height]).toEqual([900, 1414])
   await settings(); await page.getByRole('combobox', { name: '리사이즈 기준' }).selectOption('longEdge')
   await expect(page.getByTestId('output-size')).toHaveText('573 × 900 px')
-  await page.getByRole('button', { name: 'PNG로 저장' }).click()
+  await saveKey()
   await expect(page.getByRole('status')).toContainText('저장 완료')
   const long = PNG.sync.read(await readFile(join(target, '세로_kkumi_1.png')))
   expect([long.width, long.height]).toEqual([573, 900])
@@ -1026,7 +1033,7 @@ test('탐색기에서 끌어 놓은 사진은 목록에 추가되고 썸네일�
   await page.getByRole('button', { name: '두 번째.png 목록에서 제거', exact: true }).click()
   await expect(page.getByRole('region', { name: '사진 목록' })).toHaveCount(0)
   await expect(page.getByText('사진을 이 창으로 끌어다 놓으세요')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'PNG로 저장' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '저장하고 다음' })).toBeDisabled()
   await drop([second])
   await expect(page.getByRole('button', { name: '사진 1: 두 번째.png', exact: true })).toHaveAttribute('aria-pressed', 'true')
   expect(errors).toEqual([])
@@ -1078,16 +1085,33 @@ test('블러·모자이크 영역을 드래그로 그리고 이동·강도 조�
   const toggle = page.getByRole('button', { name: '블러·모자이크' })
   await toggle.click()
   await expect(toggle).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('tab', { name: /가림/ })).toHaveAttribute('aria-selected', 'true')
   await page.keyboard.press('Escape')
   await expect(toggle).toHaveAttribute('aria-pressed', 'false')
-  await toggle.click()
+  await page.getByTestId('canvas-area').focus(); await page.keyboard.press('b')
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByRole('radio', { name: '블러' })).toHaveAttribute('aria-checked', 'true')
   await page.mouse.move(...at(300, 200)); await page.mouse.down()
   await page.mouse.move(...at(500, 400), { steps: 10 }); await page.mouse.up()
   await expect(page.getByTestId('region-count')).toHaveText('1')
-  await expect(toggle).toHaveAttribute('aria-pressed', 'false')
+  // The tool stays on: a click on empty photo only clears the selection, the next drag draws again.
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true')
   await expect.poll(async () => Math.abs(await value('중심 X') - 400)).toBeLessThan(3 / scale)
   await expect.poll(async () => Math.abs(await value('영역 너비') - 200)).toBeLessThan(3 / scale)
+  await page.mouse.click(...at(1000, 700))
+  await expect(page.getByTestId('region-count')).toHaveText('1')
+  await expect(page.getByTestId('region-target')).toContainText('다음에 그릴')
+  // Rectangle started outside the photo snaps to the photo corner.
+  await page.getByRole('radio', { name: /사각형/ }).click()
+  await page.mouse.move(box.x - 12, box.y - 12); await page.mouse.down()
+  await page.mouse.move(...at(200, 150), { steps: 10 }); await page.mouse.up()
+  await expect(page.getByTestId('region-count')).toHaveText('2')
+  await expect.poll(async () => Math.abs(await value('중심 X') - 100)).toBeLessThan(3 / scale)
+  await expect.poll(async () => Math.abs(await value('영역 높이') - 150)).toBeLessThan(3 / scale)
+  // Clicking an existing region selects it instead of drawing.
+  await page.mouse.click(...at(400, 300))
+  await expect(page.getByRole('button', { name: '가림 1: 블러', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('region-count')).toHaveText('2')
   // Drag the ellipse itself, then nudge with the keyboard like a sticker.
   await page.mouse.move(...at(400, 300)); await page.mouse.down()
   await page.mouse.move(...at(500, 300), { steps: 10 }); await page.mouse.up()
@@ -1114,10 +1138,13 @@ test('블러·모자이크 영역을 드래그로 그리고 이동·강도 조�
 
   await save()
   const blurred = await output()
-  const inside = pixel(blurred, 600, 400), outside = pixel(blurred, 200, 100)
+  const inside = pixel(blurred, 600, 400), outside = pixel(blurred, 1000, 700)
   expect(inside[0]).toBeGreaterThan(90); expect(inside[0]).toBeLessThan(165)
   expect(pixel(blurred, 601, 400)[0]).toBeLessThan(pixel(blurred, 600, 400)[0] + 20)
-  expect([outside[0], pixel(blurred, 202, 100)[0]].sort()).toEqual([0, 255])
+  expect([outside[0], pixel(blurred, 1002, 700)[0]].sort()).toEqual([0, 255])
+  // The rectangle reaches the photo corner and stays square-edged: (1,1) is hidden, (212,100) is not.
+  for (const [x, y] of [[1, 1], [100, 75], [190, 140]]) { const v = pixel(blurred, x, y)[0]; expect(v).toBeGreaterThan(60); expect(v).toBeLessThan(195) }
+  expect([pixel(blurred, 212, 100)[0], pixel(blurred, 214, 100)[0]].sort()).toEqual([0, 255])
   expect(pixel(blurred, 600, 296)[0] === 0 || pixel(blurred, 600, 296)[0] === 255).toBe(true)
 
   await page.getByRole('radio', { name: '모자이크' }).click()
@@ -1128,9 +1155,16 @@ test('블러·모자이크 영역을 드래그로 그리고 이동·강도 조�
   expect(pixel(mosaic, 560, 380)).toEqual(pixel(mosaic, 595, 395))
   expect(pixel(mosaic, 560, 380)[0]).toBeGreaterThan(100); expect(pixel(mosaic, 560, 380)[0]).toBeLessThan(155)
   await page.getByRole('button', { name: '선택 삭제', exact: true }).click()
-  await expect(page.getByTestId('region-count')).toHaveCount(0)
-  await page.getByRole('button', { name: '실행 취소', exact: true }).click()
   await expect(page.getByTestId('region-count')).toHaveText('1')
+  await page.getByRole('button', { name: '실행 취소', exact: true }).click()
+  await expect(page.getByTestId('region-count')).toHaveText('2')
+  await page.getByRole('button', { name: '모두 지우기', exact: true }).click()
+  await expect(page.getByTestId('region-count')).toHaveText('0')
+  await page.getByRole('button', { name: '실행 취소', exact: true }).click()
+  await expect(page.getByTestId('region-count')).toHaveText('2')
+  // Leaving the tool locks regions again; stickers are back on the sticker tab.
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('tab', { name: '스티커', exact: true })).toHaveAttribute('aria-selected', 'true')
   expect(errors).toEqual([])
 })
 

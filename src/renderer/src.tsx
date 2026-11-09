@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type DragEvent } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { BlurRegion, ImageAsset, PhotoApi, PhotoInfo, Placement, RegionStyle } from '../shared/model'
+import type { ImageAsset, PhotoApi, PhotoInfo, Placement, RegionShape, RegionStyle } from '../shared/model'
 import { validPlacement } from '../shared/model'
 import type { LibrarySticker, StickerMetadata } from '../shared/library'
 import { LibraryPanel } from './LibraryPanel'
 import { EditorCanvas } from './EditorCanvas'
 import { GifMaker } from './GifMaker'
 import type { VideoRef } from '../shared/gif'
-import { addInstance, addRegion, setAdjustments, updateSelectedRegion, validStrength, updateSelected, removeSelected, duplicateSelected, reorderSelected, emptyHistory, commitScene, undoScene, redoScene, MAX_INSTANCES, MAX_DECODED_STICKER_PIXELS, type Scene, type SceneHistory } from '../shared/scene'
+import { addInstance, addRegion, clearRegions, setAdjustments, updateSelectedRegion, validStrength, updateSelected, removeSelected, duplicateSelected, reorderSelected, emptyHistory, commitScene, undoScene, redoScene, MAX_INSTANCES, MAX_DECODED_STICKER_PIXELS, type Scene, type SceneHistory } from '../shared/scene'
 import { createPhotoSession, editPhotoSession, savePhotoSession, discardPhotoSession, sessionAssets, type PhotoSession } from '../shared/photo-session'
 import { DEFAULT_OUTPUT, validOutput, outputSize, outputKey, type OutputSettings } from '../shared/output'
 import { composePng } from './export'
@@ -51,11 +51,13 @@ function App() {
   const placement = scene.stickers.find(item => item.id === scene.selectedId) ?? null
   const region = scene.regions.find(item => item.id === scene.selectedId) ?? null
   const selection: Placement | null = placement ?? region
-  const [drawMode, setDrawMode] = useState(false)
-  const [regionDefaults, setRegionDefaults] = useState<Pick<BlurRegion, 'style' | 'strength'>>({ style: 'blur', strength: 50 })
+  type RegionEffect = { style: RegionStyle; strength: number; shape: RegionShape }
+  const [regionDefaults, setRegionDefaults] = useState<RegionEffect>({ style: 'blur', strength: 50, shape: 'ellipse' })
   const liveBase = useRef<Scene | null>(null)
-  const [sideTab, setSideTab] = useState<'stickers' | 'adjust'>('stickers')
+  const [sideTab, setSideTab] = useState<'stickers' | 'regions' | 'adjust'>('stickers')
   const [mode, setMode] = useState<'photo' | 'gif'>('photo')
+  // The region tab is the blur/mosaic tool: it stays on until another tab, Esc or the toolbar button.
+  const drawMode = sideTab === 'regions' && mode === 'photo' && !!photo
   const [incomingVideo, setIncomingVideo] = useState<{ ref: VideoRef; nonce: number } | null>(null)
   const [gifBusy, setGifBusy] = useState(false)
   const showError = useCallback((text: string) => setError(text), [])
@@ -125,7 +127,7 @@ function App() {
     liveBase.current = null
     applyHistory(commitScene({ ...currentHistory.current, present: base }, currentHistory.current.present))
   }
-  function changeRegionEffect(effect: Pick<BlurRegion, 'style' | 'strength'>, live = false) {
+  function changeRegionEffect(effect: RegionEffect, live = false) {
     if (!validStrength(effect.strength)) return
     setRegionDefaults(effect)
     const current = currentHistory.current.present
@@ -154,12 +156,18 @@ function App() {
     setStatus(count ? `보정 값을 다른 사진 ${count}장에 적용했습니다. 사진마다 실행 취소할 수 있습니다.` : '다른 사진에 이미 같은 보정이 적용되어 있습니다.')
   }
   function drawRegion(value: Placement) {
-    setDrawMode(false); setSideTab('stickers')
     if (!photo) return
     try {
       editScene(addRegion(currentHistory.current.present, { id: crypto.randomUUID(), ...value, ...regionDefaults }))
-      setStatus('가림 영역을 만들었습니다. 드래그로 이동하고 핸들로 크기·회전을 조절하세요.')
+      setStatus('')
     } catch (value) { setError(value instanceof Error ? value.message : '영역을 만들 수 없습니다.') }
+  }
+  /** Switching tools drops a selection that belongs to the other layer. */
+  function openTab(tab: 'stickers' | 'regions' | 'adjust') {
+    const current = currentHistory.current.present
+    const onRegion = current.regions.some(item => item.id === current.selectedId)
+    if (current.selectedId && (tab === 'regions') !== onRegion) selectInstance(null)
+    setSideTab(tab)
   }
   function selectInstance(id: string | null) {
     if (operation.current || currentHistory.current.present.selectedId === id) return
@@ -228,7 +236,6 @@ function App() {
   })
   async function placeSticker(asset: ImageAsset) {
     if (!photo) return
-    setDrawMode(false)
     try {
       if (currentHistory.current.present.stickers.length >= MAX_INSTANCES) throw new Error('사진 한 장에는 스티커를 최대 200개 배치할 수 있습니다.')
       let decoded = assets.current.get(asset.id)
@@ -265,7 +272,8 @@ function App() {
     if (event.defaultPrevented || event.nativeEvent.isComposing || event.altKey
       || operation.current || closeRequest || pendingPhoto || libraryOpen || (target instanceof HTMLElement
         && (target.isContentEditable || target.closest('input, textarea, select, dialog, [role="textbox"]')))) return
-    if (event.key === 'Escape' && drawMode) { event.preventDefault(); setDrawMode(false); return }
+    if (event.key === 'Escape' && drawMode) { event.preventDefault(); openTab('stickers'); return }
+    if (photo && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.key.toLowerCase() === 'b' && !event.repeat) { event.preventDefault(); openTab(sideTab === 'regions' ? 'stickers' : 'regions'); return }
     if (event.ctrlKey || event.metaKey) {
       const key = event.key.toLowerCase()
       if (!photo || !['z', 'y', 'd'].includes(key)) return
@@ -315,7 +323,7 @@ function App() {
     const session = sessions.current.get(id)!
     activeId.current = id
     currentHistory.current = session.history; setHistory(session.history); liveBase.current = null
-    setPhoto(decoded); setDirty(session.dirty); setDrawMode(false)
+    setPhoto(decoded); setDirty(session.dirty)
     setStatus(`${decoded.name} · 편집 중`)
   }
   const choosePhoto = () => run(async () => {
@@ -383,6 +391,10 @@ function App() {
     cancelSwitch()
   })
   async function saveCurrent(): Promise<boolean> {
+    // A failed save must not leave "저장 중…" behind; the error itself is shown as an alert.
+    try { return await writeCurrent() } catch (error) { setStatus(''); throw error }
+  }
+  async function writeCurrent(): Promise<boolean> {
     if (!photo) return false
     if (!outputLoaded) throw new Error('출력 설정을 불러온 뒤 저장할 수 있습니다.')
     outputSize(photo.width, photo.height, output)
@@ -441,8 +453,34 @@ function App() {
   const outputSummary = `${output.format === 'jpg' ? 'JPG' : 'PNG'} · ${output.resizeEnabled ? `${output.resizeBasis === 'width' ? '가로' : '긴 축'} ${output.landscapeSize}/${output.portraitSize}px` : '원본 크기'}`
   const photoState = (session: PhotoSession) => session.dirty ? (session.saved ? '저장 후 수정' : '수정됨') : session.saved ? (session.outputKey !== outputKey(output) ? '출력 설정 변경' : session.savedFolder !== outputFolder ? '출력 폴더 변경' : '저장 완료') : '미작업'
   const canSave = !busy && !!photo && outputLoaded && !outputError
+  // Ctrl/Cmd+S saves the current photo in place (no move); the toolbar keeps only 저장하고 다음.
+  const saveShortcut = useRef(() => {})
+  // Any open modal (close/switch confirmation, sticker manager) blocks it; state flags clear a tick later than the dialog closes.
+  saveShortcut.current = () => { if (mode === 'photo' && canSave && !document.querySelector('dialog[open]')) void save() }
+  useEffect(() => {
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== 's') return
+      event.preventDefault()
+      if (!event.repeat) saveShortcut.current()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
   const hasFiles = (event: DragEvent) => Array.from(event.dataTransfer.types).includes('Files')
   const dropBlocked = busy || gifBusy || !!pendingPhoto || !!closeRequest || libraryOpen
+  const effect: RegionEffect = region ? { style: region.style, strength: region.strength, shape: region.shape ?? 'ellipse' } : regionDefaults
+  const numericFields = selection ? <div className="placement-detail">
+    <button className="disclosure" aria-expanded={fieldsOpen} onClick={toggleFields}><span className="chevron" aria-hidden="true">▸</span>위치·크기 숫자로 조정</button>
+    {fieldsOpen && <fieldset className="placement-fields" disabled={busy} title="원본 픽셀 기준">
+              <label>X<input aria-label="중심 X" type="number" value={Math.round(selection.x)} onChange={e => change({ ...selection, x: e.target.valueAsNumber })} /></label>
+              <label>Y<input aria-label="중심 Y" type="number" value={Math.round(selection.y)} onChange={e => change({ ...selection, y: e.target.valueAsNumber })} /></label>
+              {region ? <>
+                <label>너비<input aria-label="영역 너비" type="number" min="1" max="32768" value={Math.round(region.width)} onChange={e => change({ ...region, width: e.target.valueAsNumber })} /></label>
+                <label>높이<input aria-label="영역 높이" type="number" min="1" max="32768" value={Math.round(region.height)} onChange={e => change({ ...region, height: e.target.valueAsNumber })} /></label>
+              </> : <label>너비<input aria-label="스티커 너비" type="number" min="1" max="32768" value={Math.round(selection.width)} onChange={e => change({ ...selection, width: e.target.valueAsNumber, height: e.target.valueAsNumber * selection.height / selection.width })} /></label>}
+              <label>회전<input aria-label="회전" type="number" value={Math.round(selection.rotation)} onChange={e => change({ ...selection, rotation: e.target.valueAsNumber })} /></label>
+            </fieldset>}
+  </div> : null
   // Files dropped on the sticker library register as stickers; anywhere else they open as photos/videos.
   const dropZone = (event: DragEvent): 'photos' | 'stickers' => mode === 'photo' && sideTab === 'stickers' && (event.target as Element).closest?.('.library-pane') ? 'stickers' : 'photos'
   const editTools = selection ? <>
@@ -497,7 +535,7 @@ function App() {
       <h1>포토꾸미</h1>
       <div className="mode-tabs" role="tablist" aria-label="작업 모드">
         <button role="tab" aria-selected={mode === 'photo'} disabled={gifBusy} onClick={() => setMode('photo')}>사진 편집</button>
-        <button role="tab" aria-selected={mode === 'gif'} disabled={busy} onClick={() => { setDrawMode(false); setSettingsOpen(false); setMode('gif') }}>GIF 만들기</button>
+        <button role="tab" aria-selected={mode === 'gif'} disabled={busy} onClick={() => { setSettingsOpen(false); setMode('gif') }}>GIF 만들기</button>
       </div>
       <div className="photo-tools" hidden={mode !== 'photo'}>
       <nav aria-label="파일 작업" className="toolbar-group">
@@ -509,7 +547,7 @@ function App() {
         <button className="icon" aria-label="다시 실행" title="다시 실행 (Ctrl+Shift+Z)" disabled={busy || !history.future.length} onClick={() => applyHistory(redoScene(currentHistory.current))}><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="m10.5 3.5 3 3-3 3"/><path d="M13.5 6.5h-7a4 4 0 0 0 0 8H9"/></svg></button>
       </div>
       <div className="toolbar-group">
-        <button className="draw-toggle" aria-label="블러·모자이크" aria-pressed={drawMode} disabled={busy || !photo} title="블러·모자이크 영역 그리기 — 드래그, Shift: 정원, 클릭: 기본 원, Esc: 취소" onClick={() => { setDrawMode(mode => !mode); setSideTab('stickers') }}>
+        <button className="draw-toggle" aria-label="블러·모자이크" aria-pressed={drawMode} disabled={busy || !photo} title="블러·모자이크 도구 (B) — 켜 둔 채로 여러 곳을 연속으로 가릴 수 있습니다" onClick={() => openTab(sideTab === 'regions' ? 'stickers' : 'regions')}>
           <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="2.4 1.8"><ellipse cx="8" cy="8" rx="6.5" ry="5.5" /></svg><span className="label"> 블러·모자이크</span><span className="label-short"> 블러</span>
         </button>
       </div>
@@ -541,8 +579,7 @@ function App() {
           </fieldset>
         </div>
       </div>
-      <button onClick={save} disabled={!canSave}>{busy ? '처리 중…' : output.format === 'jpg' ? 'JPG로 저장' : 'PNG로 저장'}</button>
-      <button className="primary" onClick={saveNext} disabled={!canSave}>저장하고 다음</button>
+      <button className="primary" onClick={saveNext} disabled={!canSave} title={`${output.format === 'jpg' ? 'JPG' : 'PNG'}로 저장하고 다음 사진으로 · 이동 없이 저장은 Ctrl+S`}>{busy ? '처리 중…' : '저장하고 다음'}</button>
       </div>
     </header>
     <div className="gif-host" hidden={mode !== 'gif'}>
@@ -552,16 +589,46 @@ function App() {
     <section className="workspace" hidden={mode !== 'photo'}>
       <div className="canvas-column">
         {photo ? <EditorCanvas key={photo.id} photo={photo} assets={assets.current} scene={scene} disabled={busy} onSelect={selectInstance} onChange={(id, value) => change(value, id)} selectionTools={editTools}
-          drawMode={drawMode} onDraw={drawRegion}
+          drawMode={drawMode} drawShape={regionDefaults.shape} onDraw={drawRegion}
           info={<>{photo.name} · {photo.width} × {photo.height} px{outputLabel && outputLabel !== `${photo.width} × ${photo.height} px` ? ` → ${outputLabel}` : ''} · <b className={dirty ? 'dirty' : ''}>{dirty ? '수정됨' : '원본 / 저장됨'}</b></>} />
           : <div className="empty"><div className="drop-target"><strong>사진을 이 창으로 끌어다 놓으세요</strong><span>탐색기에서 JPG·PNG 사진 여러 장이나 폴더를 한 번에 끌어 놓으면 바로 불러옵니다.</span><span>또는 위의 <b>사진 열기</b> · <b>폴더 열기</b></span></div></div>}
       </div>
       <aside>
         <div className="side-tabs" role="tablist" aria-label="편집 패널">
-          <button role="tab" aria-selected={sideTab === 'stickers'} onClick={() => setSideTab('stickers')}>스티커</button>
-          <button role="tab" aria-selected={sideTab === 'adjust'} onClick={() => { setDrawMode(false); setSideTab('adjust') }}>보정{!isNeutral(scene.adjust) && <span className="tab-dot" aria-label="(적용됨)" />}</button>
+          <button role="tab" aria-selected={sideTab === 'stickers'} onClick={() => openTab('stickers')}>스티커</button>
+          <button role="tab" aria-selected={sideTab === 'regions'} onClick={() => openTab('regions')}>가림{!!scene.regions.length && <span className="tab-count">{scene.regions.length}</span>}</button>
+          <button role="tab" aria-selected={sideTab === 'adjust'} onClick={() => openTab('adjust')}>보정{!isNeutral(scene.adjust) && <span className="tab-dot" aria-label="(적용됨)" />}</button>
         </div>
-        {sideTab === 'adjust' ? <section className="adjust-panel" aria-label="사진 보정">
+        {sideTab === 'regions' ? <section className="region-panel" aria-label="블러·모자이크">
+          <div className="region-fields" role="group" aria-label="가림 효과">
+            <div className="field-row"><span>모양</span><div className="segmented" role="radiogroup" aria-label="가림 모양">
+              {(['ellipse', 'rect'] as RegionShape[]).map(shape => <button key={shape} role="radio" aria-checked={effect.shape === shape} disabled={busy}
+                onClick={() => changeRegionEffect({ ...effect, shape })}>{shape === 'ellipse' ? '◯ 원형' : '▭ 사각형'}</button>)}
+            </div></div>
+            <div className="field-row"><span>방식</span><div className="segmented" role="radiogroup" aria-label="가림 방식">
+              {(['blur', 'mosaic'] as RegionStyle[]).map(style => <button key={style} role="radio" aria-checked={effect.style === style} disabled={busy}
+                onClick={() => changeRegionEffect({ ...effect, style })}>{style === 'blur' ? '블러' : '모자이크'}</button>)}
+            </div></div>
+            <label>강도
+              <input type="range" aria-label="가림 강도 슬라이더" min="1" max="100" step="1" disabled={busy} value={effect.strength}
+                onChange={e => changeRegionEffect({ ...effect, strength: e.target.valueAsNumber }, true)}
+                onPointerUp={commitLive} onKeyUp={commitLive} onBlur={commitLive} />
+              <input type="number" aria-label="가림 강도" min="1" max="100" step="1" disabled={busy} value={effect.strength}
+                onChange={e => changeRegionEffect({ ...effect, strength: e.target.valueAsNumber })} />
+            </label>
+            <p className="hint" data-testid="region-target">{region ? '선택한 영역에 적용됩니다.' : '다음에 그릴 영역에 적용됩니다.'}</p>
+          </div>
+          <div className="pane-heading">
+            <h2>이 사진의 가림 <small><span data-testid="region-count">{scene.regions.length}</span>/50</small></h2>
+            <button className="link" disabled={busy || !scene.regions.length} onClick={() => editScene(clearRegions(currentHistory.current.present))}>모두 지우기</button>
+          </div>
+          {!!scene.regions.length && <div className="instance-list" aria-label="가림 목록">
+            {scene.regions.map((item, index) => <button key={item.id} className="region-chip" disabled={busy}
+              aria-label={`가림 ${index + 1}: ${item.style === 'blur' ? '블러' : '모자이크'}`} aria-pressed={scene.selectedId === item.id}
+              onClick={() => selectInstance(item.id)}>{item.shape === 'rect' ? '▭' : '◯'} {item.style === 'blur' ? '블러' : '모자이크'} {index + 1}</button>)}
+          </div>}
+          {region ? numericFields : <p className="hint">{photo ? '켜 둔 채로 여러 곳을 연속으로 가릴 수 있습니다. 빈 곳을 드래그하면 새 영역, 영역을 누르면 선택됩니다. Shift는 정원·정사각형, 사진 밖에서 드래그를 시작하면 사진 끝에 딱 맞춰집니다. Esc나 B로 도구를 끕니다.' : '사진을 열면 블러·모자이크로 가릴 수 있습니다.'}</p>}
+        </section> : sideTab === 'adjust' ? <section className="adjust-panel" aria-label="사진 보정">
           {ADJUSTMENT_KEYS.map(key => {
             const label = { exposure: '노출', contrast: '대비', saturation: '채도', temperature: '색온도' }[key]
             return <div key={key} className={`adjust-row ${key}`}>
@@ -582,43 +649,15 @@ function App() {
         <div className={`library-pane${dragging === 'stickers' ? ' drop-here' : ''}`} hidden={libraryOpen}><LibraryPanel {...libraryProps} mode="pick" onManage={() => setLibraryOpen(true)} /></div>
         {photo && <section className="placed" aria-label="올린 항목">
           <div className="pane-heading">
-            <h2>올린 항목 <small>스티커 <span data-testid="instance-count">{scene.stickers.length}</span>{!!scene.regions.length && <> · 가림 <span data-testid="region-count">{scene.regions.length}</span></>}</small></h2>
+            <h2>올린 스티커 <small><span data-testid="instance-count">{scene.stickers.length}</span></small></h2>
             <button className="link" disabled={busy || !(referencedAssetsForCurrent.length || scene.regions.length || history.past.length || history.future.length)} onClick={clearScene}>배치·이력 비우기</button>
           </div>
-          {!!(scene.stickers.length || scene.regions.length) && <div className="instance-list" aria-label="사진의 스티커 목록">
-            {scene.regions.map((item, index) => <button key={item.id} className="region-chip" disabled={busy}
-              aria-label={`가림 ${index + 1}: ${item.style === 'blur' ? '블러' : '모자이크'}`} aria-pressed={scene.selectedId === item.id}
-              onClick={() => selectInstance(item.id)}>◌ {item.style === 'blur' ? '블러' : '모자이크'} {index + 1}</button>)}
+          {!!scene.stickers.length && <div className="instance-list" aria-label="사진의 스티커 목록">
             {scene.stickers.map((item, index) => <button key={item.id} disabled={busy}
               aria-label={`배치 ${index + 1}: ${assets.current.get(item.assetId)?.name ?? '스티커'}`} aria-pressed={scene.selectedId === item.id}
               onClick={() => selectInstance(item.id)}>{index + 1}. {assets.current.get(item.assetId)?.name ?? '스티커'}</button>)}
           </div>}
-          {(region || drawMode) && <div className="region-fields" role="group" aria-label="가림 효과">
-            <div className="segmented" role="radiogroup" aria-label="가림 방식">
-              {(['blur', 'mosaic'] as RegionStyle[]).map(style => <button key={style} role="radio" aria-checked={(region ?? regionDefaults).style === style} disabled={busy}
-                onClick={() => changeRegionEffect({ style, strength: (region ?? regionDefaults).strength })}>{style === 'blur' ? '블러' : '모자이크'}</button>)}
-            </div>
-            <label>강도
-              <input type="range" aria-label="가림 강도 슬라이더" min="1" max="100" step="1" disabled={busy} value={(region ?? regionDefaults).strength}
-                onChange={e => changeRegionEffect({ style: (region ?? regionDefaults).style, strength: e.target.valueAsNumber }, true)}
-                onPointerUp={commitLive} onKeyUp={commitLive} onBlur={commitLive} />
-              <input type="number" aria-label="가림 강도" min="1" max="100" step="1" disabled={busy} value={(region ?? regionDefaults).strength}
-                onChange={e => changeRegionEffect({ style: (region ?? regionDefaults).style, strength: e.target.valueAsNumber })} />
-            </label>
-            {drawMode && !region && <p className="hint">사진 위를 드래그해 영역을 그리세요. Shift는 정원, 클릭만 하면 기본 원, Esc는 취소입니다.</p>}
-          </div>}
-          {selection ? <div className="placement-detail">
-            <button className="disclosure" aria-expanded={fieldsOpen} onClick={toggleFields}><span className="chevron" aria-hidden="true">▸</span>위치·크기 숫자로 조정</button>
-            {fieldsOpen && <fieldset className="placement-fields" disabled={busy} title="원본 픽셀 기준">
-              <label>X<input aria-label="중심 X" type="number" value={Math.round(selection.x)} onChange={e => change({ ...selection, x: e.target.valueAsNumber })} /></label>
-              <label>Y<input aria-label="중심 Y" type="number" value={Math.round(selection.y)} onChange={e => change({ ...selection, y: e.target.valueAsNumber })} /></label>
-              {region ? <>
-                <label>너비<input aria-label="영역 너비" type="number" min="1" max="32768" value={Math.round(region.width)} onChange={e => change({ ...region, width: e.target.valueAsNumber })} /></label>
-                <label>높이<input aria-label="영역 높이" type="number" min="1" max="32768" value={Math.round(region.height)} onChange={e => change({ ...region, height: e.target.valueAsNumber })} /></label>
-              </> : <label>너비<input aria-label="스티커 너비" type="number" min="1" max="32768" value={Math.round(selection.width)} onChange={e => change({ ...selection, width: e.target.valueAsNumber, height: e.target.valueAsNumber * selection.height / selection.width })} /></label>}
-              <label>회전<input aria-label="회전" type="number" value={Math.round(selection.rotation)} onChange={e => change({ ...selection, rotation: e.target.valueAsNumber })} /></label>
-            </fieldset>}
-          </div> : drawMode ? null : <p className="hint">스티커를 클릭하면 사진 위에 복제·순서·삭제 버튼이 나타납니다. 방향키 1px, Shift+방향키 10px 이동.</p>}
+          {placement ? numericFields : <p className="hint">스티커를 클릭하면 사진 위에 복제·순서·삭제 버튼이 나타납니다. 방향키 1px, Shift+방향키 10px 이동.</p>}
         </section>}
         </>}
       </aside>
@@ -644,7 +683,7 @@ function App() {
         })}
       </div>
     </section>}
-    <footer className="statusbar"><p role="status" aria-live="polite">{status || (mode === 'photo' && photo ? <span className="shortcuts">Ctrl+Z 실행 취소 · Ctrl+D 복제 · Delete 삭제 · 방향키 이동 · Ctrl+휠 확대</span> : '')}</p>{error && !libraryOpen && !pendingPhoto && <p role="alert">{error}</p>}</footer>
+    <footer className="statusbar"><p role="status" aria-live="polite">{status || (mode === 'photo' && photo ? <span className="shortcuts">Ctrl+S 저장 · Ctrl+Z 실행 취소 · Ctrl+D 복제 · Delete 삭제 · B 블러·모자이크 · Ctrl+휠 확대</span> : '')}</p>{error && !libraryOpen && !pendingPhoto && <p role="alert">{error}</p>}</footer>
   </main>
 }
 createRoot(document.getElementById('root')!).render(<App />)

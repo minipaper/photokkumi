@@ -21,7 +21,9 @@ export interface Placement {
 export interface StickerInstance extends Placement { id: string; assetId: string; zOrder: number }
 export type RegionStyle = 'blur' | 'mosaic'
 /** Elliptical blur/mosaic area in logical photo pixels; (x, y) is the center, rotation in degrees. */
-export interface BlurRegion extends Placement { id: string; style: RegionStyle; strength: number }
+export type RegionShape = 'ellipse' | 'rect'
+/** A hidden area of the photo. `shape` defaults to 'ellipse'; width/height are the shape's full extent before rotation. */
+export interface BlurRegion extends Placement { id: string; style: RegionStyle; strength: number; shape?: RegionShape }
 export type Result<T> = { ok: true; value: T } | { ok: false; error: string }
 export interface PhotoBatch { photos: PhotoInfo[]; rejected: string[] }
 export interface DropBatch extends PhotoBatch { videos: VideoRef[] }

@@ -151,7 +151,7 @@ aside {
   flex: none; width: 288px; display: flex; flex-direction: column; min-height: 0; overflow: hidden;
   background: var(--surface); border-left: 1px solid var(--line);
 }
-.side-tabs { flex: none; display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid var(--line); }
+.side-tabs { flex: none; display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--line); }
 .side-tabs button { height: 38px; border: 0; border-radius: 0; background: none; color: var(--muted); font-weight: 600; border-bottom: 2px solid transparent; }
 .side-tabs button[aria-selected=true] { color: var(--accent); border-bottom-color: var(--accent); }
 .side-tabs button:hover:not(:disabled) { background: var(--surface-2); }
@@ -195,7 +195,12 @@ aside {
 button.disclosure { align-self: flex-start; height: auto; padding: 2px 0; border: 0; background: none; color: var(--muted); font-size: 12px; display: inline-flex; align-items: center; gap: 4px; }
 button.disclosure .chevron { font-size: 10px; transition: transform .12s; }
 button.disclosure[aria-expanded=true] .chevron { transform: rotate(90deg); }
-button.disclosure:hover { color: var(--text); background: none; }.region-fields { display: grid; gap: 8px; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+button.disclosure:hover { color: var(--text); background: none; }.region-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 12px; overflow: hidden; }
+.region-panel .instance-list { max-height: 96px; }
+.region-fields .field-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.region-fields .field-row .segmented { flex: 0 1 190px; }
+.tab-count { margin-left: 4px; padding: 0 5px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-size: 11px; }
+.region-fields { display: grid; gap: 8px; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 .region-fields label { justify-content: space-between; color: var(--muted); font-size: 12px; }
 .region-fields input[type=range] { flex: 1; min-width: 0; height: auto; padding: 0; border: 0; accent-color: var(--accent); background: none; }
 .region-fields input[type=number] { width: 52px; text-align: right; }

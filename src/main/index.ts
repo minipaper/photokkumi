@@ -189,9 +189,14 @@ async function save(request: SaveRequest): Promise<SaveReceipt | null> {
 }
 
 function createWindow() {
+  if (!app.isPackaged && process.platform === 'darwin') app.dock?.setIcon(join(__dirname, '../../build/icon.png'))
   win = new BrowserWindow({
     width: 1180, height: 820, minWidth: 760, minHeight: 580, title: '포토꾸미',
-    webPreferences: { preload: join(__dirname, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true }
+    // Packaged builds take the icon from the exe (electron-builder win.icon); dev runs point at the same file.
+    ...(app.isPackaged ? {} : { icon: join(__dirname, '../../build/icon.png') }),
+    webPreferences: { preload: join(__dirname, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true,
+      // Saves and GIF encoding must not slow to a crawl when the window is behind another one.
+      backgroundThrottling: false }
   })
   allowClose = false; pendingClose = null; quitRequested = false
   win.on('close', event => {

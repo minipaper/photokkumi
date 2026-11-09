@@ -12,10 +12,11 @@ export function blurSigma(region: Pick<BlurRegion, 'width' | 'height' | 'strengt
 export function mosaicBlock(region: Pick<BlurRegion, 'width' | 'height' | 'strength'>) {
   return Math.max(2, Math.round(Math.min(region.width, region.height) * region.strength / 100 * 0.25))
 }
-/** Axis-aligned bounds of the rotated ellipse clamped to the photo, in whole pixels; null if fully outside. */
-export function regionBounds(region: Pick<BlurRegion, 'x' | 'y' | 'width' | 'height' | 'rotation'>, photoWidth: number, photoHeight: number): Rect | null {
+/** Axis-aligned bounds of the rotated ellipse/rectangle clamped to the photo, in whole pixels; null if fully outside. */
+export function regionBounds(region: Pick<BlurRegion, 'x' | 'y' | 'width' | 'height' | 'rotation' | 'shape'>, photoWidth: number, photoHeight: number): Rect | null {
   const a = region.width / 2, b = region.height / 2, angle = region.rotation * Math.PI / 180
-  const ex = Math.hypot(a * Math.cos(angle), b * Math.sin(angle)), ey = Math.hypot(a * Math.sin(angle), b * Math.cos(angle))
+  const cos = Math.abs(Math.cos(angle)), sin = Math.abs(Math.sin(angle))
+  const [ex, ey] = region.shape === 'rect' ? [a * cos + b * sin, a * sin + b * cos] : [Math.hypot(a * cos, b * sin), Math.hypot(a * sin, b * cos)]
   const left = Math.max(0, Math.floor(region.x - ex)), top = Math.max(0, Math.floor(region.y - ey))
   const right = Math.min(photoWidth, Math.ceil(region.x + ex)), bottom = Math.min(photoHeight, Math.ceil(region.y + ey))
   return right > left && bottom > top ? { x: left, y: top, width: right - left, height: bottom - top } : null

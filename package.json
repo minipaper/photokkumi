@@ -12,13 +12,15 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:e2e": "npm run build && playwright test",
-    "package:win": "npm run typecheck && npm run build && electron-builder --win nsis --x64 --publish never"
+    "package:win": "npm run typecheck && npm run build && electron-builder --win nsis --x64 --publish never",
+    "icon": "node scripts/make-icon.mjs"
   },
   "build": {
     "appId": "com.photokkumi.app",
     "productName": "PhotoKkumi",
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "build"
     },
     "files": [
       "out/**/*",
@@ -33,7 +35,8 @@
             "x64"
           ]
         }
-      ]
+      ],
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,

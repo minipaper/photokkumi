@@ -82,7 +82,7 @@ export function GifMaker({ incoming, outputFolder, onSaved, onStatus, onError, o
   if (!tool) return <div className="gif-center"><p className="hint">ffmpeg를 찾는 중…</p></div>
   if (!tool.found) return <div className="gif-center"><section className="gif-setup" aria-label="ffmpeg 설치 안내">
     <h2>GIF 만들기에는 ffmpeg가 필요합니다</h2>
-    <p>포토꾸미는 ffmpeg를 포함하지 않습니다. 무료 프로그램인 ffmpeg를 직접 설치하면 아이폰 MOV(HEVC)도 GIF로 만들 수 있습니다.</p>
+    <p>포토꾸미는 ffmpeg를 포함하지 않습니다. 무료 프로그램인 ffmpeg를 한 번만 설치하면 휴대폰·카메라로 찍은 MOV, MP4 동영상을 GIF로 만들 수 있습니다.</p>
     <ol>
       <li>{isMac ? '터미널을 엽니다.' : '시작 메뉴에서 “터미널” 또는 “명령 프롬프트”를 엽니다.'}</li>
       <li>아래 명령을 복사해 붙여 넣고 Enter를 누릅니다.
@@ -103,7 +103,7 @@ export function GifMaker({ incoming, outputFolder, onSaved, onStatus, onError, o
   const openVideo = () => act('tool', async () => { const ref = unwrap(await api.openVideo()); if (ref) setPending(ref) })
   if (!video) return <div className="gif-center">
     <div className="drop-target"><strong>{work === 'load' ? '미리보기를 만드는 중…' : '동영상을 이 창으로 끌어다 놓으세요'}</strong>
-      <span>아이폰 MOV, MP4에서 원하는 구간만 골라 GIF로 만듭니다.</span>
+      <span>MOV·MP4 동영상(아이폰, 갤럭시, 카메라 등)에서 원하는 구간만 골라 GIF로 만듭니다.</span>
       <button disabled={busy} onClick={openVideo}>동영상 열기</button></div>
   </div>
 

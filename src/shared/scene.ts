@@ -14,13 +14,14 @@ export function setAdjustments(scene: Scene, adjust: Adjustments): Scene {
 export const validStrength = (value: number) => Number.isInteger(value) && value >= 1 && value <= 100
 export function addRegion(scene: Scene, region: BlurRegion): Scene {
   if (scene.regions.length >= MAX_REGIONS) throw new Error('사진 한 장에는 블러·모자이크 영역을 최대 50개 만들 수 있습니다.')
-  if (!validPlacement(region) || !validStrength(region.strength) || !['blur', 'mosaic'].includes(region.style)
+  if (!validPlacement(region) || !validStrength(region.strength) || !['blur', 'mosaic'].includes(region.style) || !validShape(region.shape)
     || [...scene.regions, ...scene.stickers].some(old => old.id === region.id)) throw new Error('잘못된 블러 영역입니다.')
   return { ...scene, regions: [...scene.regions, region], selectedId: region.id }
 }
-export function updateSelectedRegion(scene: Scene, effect: Pick<BlurRegion, 'style' | 'strength'>): Scene {
-  if (!validStrength(effect.strength) || !['blur', 'mosaic'].includes(effect.style)) throw new Error('잘못된 블러 설정입니다.')
-  return { ...scene, regions: scene.regions.map(item => item.id === scene.selectedId ? { ...item, style: effect.style, strength: effect.strength } : item) }
+const validShape = (shape: unknown) => shape === undefined || shape === 'ellipse' || shape === 'rect'
+export function updateSelectedRegion(scene: Scene, effect: Pick<BlurRegion, 'style' | 'strength' | 'shape'>): Scene {
+  if (!validStrength(effect.strength) || !['blur', 'mosaic'].includes(effect.style) || !validShape(effect.shape)) throw new Error('잘못된 블러 설정입니다.')
+  return { ...scene, regions: scene.regions.map(item => item.id === scene.selectedId ? { ...item, style: effect.style, strength: effect.strength, shape: effect.shape ?? item.shape } : item) }
 }
 const ordered = (stickers: StickerInstance[]) => stickers.map((item, index) => ({ ...item, zOrder: index }))
 export function addInstance(scene: Scene, item: StickerInstance): Scene {
@@ -42,10 +43,15 @@ export function duplicateSelected(scene: Scene, id: string): Scene {
 export function removeSelected(scene: Scene): Scene {
   if (scene.regions.some(item => item.id === scene.selectedId)) {
     const regions = scene.regions.filter(item => item.id !== scene.selectedId)
-    return { ...scene, regions, selectedId: regions.at(-1)?.id ?? scene.stickers.at(-1)?.id ?? null }
+    // Stay on the same layer: the region tool and the sticker tool each select their own items.
+    return { ...scene, regions, selectedId: regions.at(-1)?.id ?? null }
   }
   const stickers = ordered(scene.stickers.filter(item => item.id !== scene.selectedId))
   return { ...scene, stickers, selectedId: stickers.at(-1)?.id ?? null }
+}
+/** Removes every blur/mosaic region of the photo as one undoable step. */
+export function clearRegions(scene: Scene): Scene {
+  return { ...scene, regions: [], selectedId: scene.regions.some(item => item.id === scene.selectedId) ? null : scene.selectedId }
 }
 export function reorderSelected(scene: Scene, direction: -1 | 1): Scene {
   const index = scene.stickers.findIndex(item => item.id === scene.selectedId), next = index + direction

@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest'
 import { blurPixels, mosaicPixels, regionBounds, sourceRect, regionPatch, blurSigma, mosaicBlock } from '../src/shared/effects'
-import { addRegion, updateSelectedRegion, updateSelected, duplicateSelected, removeSelected, addInstance, emptyHistory } from '../src/shared/scene'
+import { addRegion, clearRegions, updateSelectedRegion, updateSelected, duplicateSelected, removeSelected, addInstance, emptyHistory } from '../src/shared/scene'
 import type { BlurRegion } from '../src/shared/model'
 
 const pixels = (width: number, height: number, value: (x: number, y: number) => number[]) => {
@@ -64,4 +64,26 @@ it('블러 영역은 스티커와 별도로 추가·수정·복제·삭제되고
   expect(() => addRegion(scene, { ...region, id: 'x', width: 0 })).toThrow()
   expect(() => updateSelectedRegion(scene, { style: 'mosaic', strength: 101 })).toThrow()
   expect(() => Array.from({ length: 51 }).reduce<typeof scene>((value, _, index) => addRegion(value, { ...region, id: `m${index}` }), emptyHistory().present)).toThrow('50')
+})
+
+it('사각형 영역은 회전한 네 모서리로 경계를 잡고, 모양 변경·전체 지우기·같은 층 선택을 지킨다', () => {
+  const rect: BlurRegion = { ...region, shape: 'rect' }
+  expect(regionBounds(rect, 200, 100)).toEqual({ x: 30, y: 30, width: 40, height: 20 })
+  // 45°: a rectangle's corners reach further than the inscribed ellipse.
+  const rotated = regionBounds({ ...rect, rotation: 45 }, 200, 100)!, ellipse = regionBounds({ ...region, rotation: 45 }, 200, 100)!
+  expect(rotated.width).toBe(Math.ceil(50 + 30 * Math.SQRT1_2) - Math.floor(50 - 30 * Math.SQRT1_2))
+  expect(rotated.width).toBeGreaterThan(ellipse.width)
+  let scene = addRegion(emptyHistory().present, region)
+  expect(() => addRegion(scene, { ...region, id: 'bad', shape: 'star' as never })).toThrow()
+  scene = updateSelectedRegion(scene, { style: 'blur', strength: 50, shape: 'rect' })
+  expect(scene.regions[0].shape).toBe('rect')
+  scene = updateSelectedRegion(scene, { style: 'mosaic', strength: 50 })
+  expect(scene.regions[0]).toMatchObject({ shape: 'rect', style: 'mosaic' })
+  scene = addInstance(scene, { id: 's', assetId: 'a', x: 1, y: 1, width: 10, height: 10, rotation: 0, zOrder: 0 })
+  scene = { ...scene, selectedId: 'r' }
+  // Deleting the last region never jumps the selection onto a sticker (different tool).
+  expect(removeSelected(scene).selectedId).toBeNull()
+  const cleared = clearRegions(scene)
+  expect(cleared.regions).toEqual([]); expect(cleared.selectedId).toBeNull(); expect(cleared.stickers).toHaveLength(1)
+  expect(clearRegions({ ...scene, selectedId: 's' }).selectedId).toBe('s')
 })

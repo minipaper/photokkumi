@@ -1,6 +1,7 @@
 import { DEFAULT_OUTPUT, outputSize, type OutputSettings } from '../shared/output'
-import type { StickerInstance } from '../shared/model'
-export async function composePng(photo: ImageBitmap, instances: StickerInstance[], assets: ReadonlyMap<string, { bitmap: ImageBitmap }>, output: OutputSettings = DEFAULT_OUTPUT): Promise<Uint8Array> {
+import type { BlurRegion, StickerInstance } from '../shared/model'
+import { buildRegionPatch, ellipsePath } from './regions'
+export async function composePng(photo: ImageBitmap, instances: StickerInstance[], assets: ReadonlyMap<string, { bitmap: ImageBitmap }>, output: OutputSettings = DEFAULT_OUTPUT, regions: BlurRegion[] = []): Promise<Uint8Array> {
   const canvas = document.createElement('canvas')
   const size = outputSize(photo.width, photo.height, output)
   canvas.width = size.width
@@ -13,6 +14,16 @@ export async function composePng(photo: ImageBitmap, instances: StickerInstance[
     if (output.format === 'jpg') { context.fillStyle = '#ffffff'; context.fillRect(0, 0, canvas.width, canvas.height) }
     context.scale(size.width / photo.width, size.height / photo.height)
     context.drawImage(photo, 0, 0)
+    // Regions hide photo pixels only; stickers are always drawn above them.
+    for (const region of regions) {
+      const patch = buildRegionPatch(photo, region)
+      if (!patch) continue
+      context.save()
+      ellipsePath(context, region); context.clip()
+      context.drawImage(patch.canvas, patch.bounds.x, patch.bounds.y)
+      context.restore()
+      patch.canvas.width = 0; patch.canvas.height = 0
+    }
     for (const placement of [...instances].sort((a, b) => a.zOrder - b.zOrder)) {
       const sticker = assets.get(placement.assetId)?.bitmap
       if (!sticker) throw new Error('스티커 이미지가 없습니다.')

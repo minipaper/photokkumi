@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Stage, Layer, Image as CanvasImage, Transformer, Group } from 'react-konva'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Stage, Layer, Image as CanvasImage, Transformer, Group, Ellipse } from 'react-konva'
 import type Konva from 'konva'
-import type { Placement } from '../shared/model'
+import type { BlurRegion, Placement } from '../shared/model'
+import { buildRegionPatch, ellipsePath, regionKey, type RegionPatch } from './regions'
 import type { Scene } from '../shared/scene'
 import { fitScale } from '../shared/model'
 // A bundled vector cursor keeps the rotation affordance crisp at high DPI.
@@ -14,10 +15,41 @@ interface Props {
   onSelect(id: string | null): void
   onChange(id: string, value: Placement): void
   info?: ReactNode
+  /** When true, dragging on the photo draws a new blur region instead of selecting. */
+  drawMode?: boolean
+  onDraw?(value: Placement): void
 }
-export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChange, info }: Props) {
+type Draft = { start: { x: number; y: number }; end: { x: number; y: number }; circle: boolean }
+function draftPlacement(draft: Draft, photo: { width: number; height: number }): Placement {
+  let width = Math.abs(draft.end.x - draft.start.x), height = Math.abs(draft.end.y - draft.start.y)
+  if (width < 6 && height < 6) {
+    // A plain click drops a default circle centered on the pointer.
+    const diameter = Math.max(8, Math.round(Math.min(photo.width, photo.height) / 5))
+    return { x: draft.start.x, y: draft.start.y, width: diameter, height: diameter, rotation: 0 }
+  }
+  if (draft.circle) width = height = Math.max(width, height)
+  const x = draft.start.x + Math.sign(draft.end.x - draft.start.x || 1) * width / 2
+  const y = draft.start.y + Math.sign(draft.end.y - draft.start.y || 1) * height / 2
+  return { x, y, width: Math.max(4, width), height: Math.max(4, height), rotation: 0 }
+}
+export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChange, info, drawMode = false, onDraw }: Props) {
   const area = useRef<HTMLDivElement>(null)
-  const images = useRef(new Map<string, Konva.Image>())
+  const images = useRef(new Map<string, Konva.Node>())
+  const [draft, setDraft] = useState<Draft | null>(null)
+  const [moving, setMoving] = useState<string | null>(null)
+  const patchCache = useRef(new Map<string, { key: string; patch: RegionPatch | null }>())
+  const patches = useMemo(() => {
+    const cache = patchCache.current, next = new Map<string, { key: string; patch: RegionPatch | null }>()
+    for (const region of scene.regions) {
+      const key = regionKey(region), cached = cache.get(region.id)
+      next.set(region.id, cached && cached.key === key ? cached : { key, patch: buildRegionPatch(photo.bitmap, region) })
+    }
+    for (const [id, entry] of cache) if (next.get(id) !== entry && entry.patch) { entry.patch.canvas.width = 0; entry.patch.canvas.height = 0 }
+    patchCache.current = next
+    return next
+  }, [scene.regions, photo.bitmap])
+  useEffect(() => () => { for (const entry of patchCache.current.values()) if (entry.patch) { entry.patch.canvas.width = 0; entry.patch.canvas.height = 0 } }, [])
+  const selectedRegion = scene.regions.some(item => item.id === scene.selectedId)
   const stage = useRef<Konva.Stage>(null)
   const [zoom, setZoom] = useState<number | null>(null)
   const [pan, setPan] = useState({ x: 0, y: 0 })
@@ -31,8 +63,19 @@ export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChang
   }, [])
   useEffect(() => {
     const image = scene.selectedId ? images.current.get(scene.selectedId) : undefined
-    transformer.current?.nodes(image && !panMode ? [image] : [])
-  }, [scene.selectedId, scene.stickers, panMode])
+    transformer.current?.nodes(image && !panMode && !drawMode ? [image] : [])
+  }, [scene.selectedId, scene.stickers, scene.regions, panMode, drawMode])
+  useEffect(() => {
+    if (!draft) return
+    const finish = (event: MouseEvent) => { setDraft(null); onDraw?.(draftPlacement({ ...draft, circle: draft.circle || event.shiftKey }, photo)) }
+    window.addEventListener('mouseup', finish)
+    return () => window.removeEventListener('mouseup', finish)
+  }, [draft, onDraw, photo])
+  useEffect(() => { if (!drawMode) setDraft(null) }, [drawMode])
+  const pointer = () => {
+    const point = stage.current?.getRelativePointerPosition()
+    return point ? { x: Math.min(photo.width, Math.max(0, point.x)), y: Math.min(photo.height, Math.max(0, point.y)) } : null
+  }
   const scale = zoom ?? fitScale(photo.width, photo.height, size.width, size.height)
   const viewport = { width: Math.min(photo.width * scale, size.width), height: Math.min(photo.height * scale, size.height) }
   const constrain = (point: { x: number; y: number }, nextScale = scale) => ({
@@ -48,12 +91,30 @@ export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChang
     setZoom(nextScale)
   }
   const deselect = (event: Konva.KonvaEventObject<Event>) => {
-    if (!disabled && !panMode && event.target === event.target.getStage()) onSelect(null)
+    if (!disabled && !panMode && !drawMode && event.target === event.target.getStage()) onSelect(null)
   }
+  const interactive = !disabled && !panMode && !drawMode
+  const transformEnd = (id: string) => {
+    const node = images.current.get(id)!
+    const next = { x: node.x(), y: node.y(), width: node.width() * node.scaleX(), height: node.height() * node.scaleY(), rotation: node.rotation() }
+    node.scale({ x: 1, y: 1 })
+    setMoving(null)
+    onChange(id, next)
+  }
+  const regionNode = (region: BlurRegion) => <Ellipse key={region.id} name="blur-region"
+    ref={node => { if (node) images.current.set(region.id, node); else images.current.delete(region.id) }}
+    x={region.x} y={region.y} radiusX={region.width / 2} radiusY={region.height / 2} rotation={region.rotation}
+    fill={moving === region.id ? 'rgba(91,69,201,0.25)' : 'transparent'} stroke="#ffffff" strokeWidth={1.5} dash={[6, 4]} strokeScaleEnabled={false}
+    shadowColor="#000" shadowBlur={2} shadowOpacity={0.6} shadowForStrokeEnabled
+    draggable={interactive} listening={interactive}
+    onMouseDown={() => onSelect(region.id)} onTouchStart={() => onSelect(region.id)}
+    onDragStart={() => { onSelect(region.id); setMoving(region.id) }} onTransformStart={() => setMoving(region.id)}
+    onDragEnd={event => { setMoving(null); onChange(region.id, { ...region, x: event.target.x(), y: event.target.y() }) }}
+    onTransformEnd={() => transformEnd(region.id)} />
   return <section className="canvas-editor">
     <div ref={area} className="canvas-area" data-testid="canvas-area" tabIndex={0} aria-label="사진 편집 캔버스"
     onMouseDownCapture={() => area.current?.focus({ preventScroll: true })}>
-    <div className="canvas-frame" data-testid="canvas-frame" data-scale={scale} data-pan-x={position.x} data-pan-y={position.y} style={{ cursor: panMode ? 'grab' : undefined }}>
+    <div className="canvas-frame" data-testid="canvas-frame" data-scale={scale} data-pan-x={position.x} data-pan-y={position.y} style={{ cursor: panMode ? 'grab' : drawMode ? 'crosshair' : undefined }}>
       <Stage ref={stage} width={viewport.width} height={viewport.height} x={position.x} y={position.y} scaleX={scale} scaleY={scale}
         draggable={panMode && !disabled} dragBoundFunc={point => constrain(point)}
         onDragEnd={event => { if (event.target === stage.current) setPan(constrain(event.target.position())) }}
@@ -61,31 +122,39 @@ export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChang
           if (disabled || (!event.evt.ctrlKey && !event.evt.metaKey)) return
           event.evt.preventDefault()
           changeZoom(scale * (event.evt.deltaY < 0 ? 1.1 : 1 / 1.1), stage.current?.getPointerPosition() ?? undefined)
-        }} onMouseDown={deselect} onTouchStart={deselect}>
+        }} onMouseDown={event => {
+          if (drawMode && !disabled && event.evt.button === 0) { const point = pointer(); if (point) setDraft({ start: point, end: point, circle: event.evt.shiftKey }); return }
+          deselect(event)
+        }} onMouseMove={event => { if (draft) { const point = pointer(); if (point) setDraft({ ...draft, end: point, circle: event.evt.shiftKey }) } }}
+        onTouchStart={deselect}>
         <Layer ref={layer => { layer?.getNativeCanvasElement().setAttribute('data-testid', 'photo-content') }}>
           <Group clipX={0} clipY={0} clipWidth={photo.width} clipHeight={photo.height}>
             <CanvasImage image={photo.bitmap} width={photo.width} height={photo.height} listening={false} />
+            {scene.regions.map(region => {
+              const patch = patches.get(region.id)?.patch
+              return patch && moving !== region.id ? <Group key={region.id} listening={false} clipFunc={context => ellipsePath(context, region)}>
+                <CanvasImage image={patch.canvas} x={patch.bounds.x} y={patch.bounds.y} />
+              </Group> : null
+            })}
+            {scene.regions.map(regionNode)}
             {scene.stickers.map(placement => <CanvasImage key={placement.id}
               ref={node => { if (node) images.current.set(placement.id, node); else images.current.delete(placement.id) }}
               image={assets.get(placement.assetId)?.bitmap}
               x={placement.x} y={placement.y} width={placement.width} height={placement.height}
               offsetX={placement.width / 2} offsetY={placement.height / 2} rotation={placement.rotation}
-              draggable={!disabled && !panMode} listening={!disabled && !panMode}
+              draggable={interactive} listening={interactive}
               onMouseDown={() => onSelect(placement.id)} onTouchStart={() => onSelect(placement.id)}
               onDragStart={() => onSelect(placement.id)}
               onDragEnd={event => onChange(placement.id, { ...placement, x: event.target.x(), y: event.target.y() })}
-              onTransformEnd={() => {
-                const node = images.current.get(placement.id)!
-                const next = { x: node.x(), y: node.y(), width: node.width() * node.scaleX(), height: node.height() * node.scaleY(), rotation: node.rotation() }
-                node.scale({ x: 1, y: 1 })
-                onChange(placement.id, next)
-              }} />)}
+              onTransformEnd={() => transformEnd(placement.id)} />)}
+            {draft && (() => { const value = draftPlacement(draft, photo); return <Ellipse x={value.x} y={value.y} radiusX={value.width / 2} radiusY={value.height / 2}
+              fill="rgba(91,69,201,0.2)" stroke="#ffffff" strokeWidth={1.5} dash={[6, 4]} strokeScaleEnabled={false} listening={false} /> })()}
           </Group>
         </Layer>
         <Layer ref={layer => { layer?.getNativeCanvasElement().setAttribute('data-testid', 'editor-overlay') }}>
-          <Transformer ref={transformer} enabledAnchors={['top-left', 'top-right', 'bottom-left', 'bottom-right']}
+          <Transformer ref={transformer} enabledAnchors={selectedRegion ? ['top-left', 'top-center', 'top-right', 'middle-left', 'middle-right', 'bottom-left', 'bottom-center', 'bottom-right'] : ['top-left', 'top-right', 'bottom-left', 'bottom-right']}
             rotateAnchorCursor={rotationCursor}
-            keepRatio flipEnabled={false} rotateEnabled={!disabled} resizeEnabled={!disabled}
+            keepRatio={!selectedRegion} flipEnabled={false} rotateEnabled={!disabled} resizeEnabled={!disabled}
             boundBoxFunc={(oldBox, newBox) => Math.abs(newBox.width) < 4 || Math.abs(newBox.height) < 4 || Math.abs(newBox.width) > 32768 * scale || Math.abs(newBox.height) > 32768 * scale ? oldBox : newBox} />
         </Layer>
       </Stage>

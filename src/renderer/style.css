@@ -115,6 +115,15 @@ aside {
 .instance-list button { height: 24px; padding: 0 8px; font-size: 11px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .instance-tools { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
 .instance-tools button { height: 28px; padding: 0; font-size: 12px; }
+.region-fields { display: grid; gap: 8px; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.region-fields label { justify-content: space-between; color: var(--muted); font-size: 12px; }
+.region-fields input[type=range] { flex: 1; min-width: 0; height: auto; padding: 0; border: 0; accent-color: var(--accent); background: none; }
+.region-fields input[type=number] { width: 52px; text-align: right; }
+.segmented { display: grid; grid-template-columns: 1fr 1fr; padding: 2px; gap: 2px; border-radius: 7px; background: var(--surface-2); border: 1px solid var(--line); }
+.segmented button { height: 26px; border: 0; background: none; font-size: 12px; }
+.segmented button[aria-checked=true] { background: var(--surface); color: var(--accent); font-weight: 600; box-shadow: 0 1px 3px #1a1f2b26; }
+.instance-list .region-chip { border-style: dashed; }
+.toolbar button svg { vertical-align: -2px; }
 .placement-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
 .placement-fields label { justify-content: space-between; color: var(--muted); font-size: 12px; }
 .placement-fields input { width: 76px; text-align: right; }

@@ -18,6 +18,9 @@ export interface Placement {
   rotation: number
 }
 export interface StickerInstance extends Placement { id: string; assetId: string; zOrder: number }
+export type RegionStyle = 'blur' | 'mosaic'
+/** Elliptical blur/mosaic area in logical photo pixels; (x, y) is the center, rotation in degrees. */
+export interface BlurRegion extends Placement { id: string; style: RegionStyle; strength: number }
 export type Result<T> = { ok: true; value: T } | { ok: false; error: string }
 export interface PhotoBatch { photos: PhotoInfo[]; rejected: string[] }
 export interface SaveReceipt { name: string; folderLabel: string }

@@ -27,14 +27,18 @@ export function LibraryPanel(props: Props) {
       <button disabled={props.disabled || !props.items.length} onClick={props.onBackup}>백업</button>
       <button disabled={props.disabled} onClick={props.onRestore}>복원</button>
     </div>}
-    <div className="library-filter">
+    {(props.mode === 'manage' || !!props.items.length) && <div className="library-filter">
     <label>분류<select aria-label="분류 필터" value={selectedCategory} onChange={event => setCategory(event.target.value)}>
       <option value="">전체</option>
       {[...new Set(props.items.map(item => item.category).filter(Boolean))].sort().map(name => <option key={name}>{name}</option>)}
     </select></label>
     <label className="checkbox"><input type="checkbox" checked={favorites} onChange={event => setFavorites(event.target.checked)} />즐겨찾기만</label>
-    </div>
-    {!props.items.length && <p>스티커 관리에서 PNG를 등록하세요. 등록한 스티커는 다음 실행에도 유지됩니다.</p>}
+    </div>}
+    {!props.items.length && (props.mode === 'pick' ? <div className="library-empty">
+      <p>자주 쓰는 PNG 스티커를 등록해 두면 클릭 한 번으로 사진에 올릴 수 있습니다. 등록한 스티커는 다음 실행에도 남아 있습니다.</p>
+      <button className="primary" disabled={props.disabled} onClick={props.onImport}>스티커 PNG 추가</button>
+      <p className="hint">PNG 파일을 이 목록으로 끌어 놓아도 등록됩니다.</p>
+    </div> : <p>PNG 등록을 눌러 스티커를 추가하세요. 등록한 스티커는 다음 실행에도 유지됩니다.</p>)}
     {!!props.items.length && !filtered.length && <p>조건에 맞는 스티커가 없습니다.</p>}
     <div className="sticker-grid">
       {filtered.map(item => <article key={item.id} aria-label={`스티커 ${item.name}`}>

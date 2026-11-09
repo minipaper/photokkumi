@@ -7,6 +7,7 @@ ipcRenderer.on('window:close-requested', (_event, requestId: unknown) => {
   if (closeCallback) closeCallback(requestId)
   else queuedClose = requestId
 })
+const droppedPaths = (files: File[]) => Array.from(files).slice(0, 200).map(file => { try { return webUtils.getPathForFile(file) } catch { return '' } }).filter(Boolean)
 const api: PhotoApi = {
   onCloseRequested: callback => {
     closeCallback = callback
@@ -27,8 +28,12 @@ const api: PhotoApi = {
   choosePhotoFolder: () => ipcRenderer.invoke('photo:folder'),
   // Only OS-backed File objects from a real drop resolve to a path; the renderer never sees or sends raw paths.
   importDroppedFiles: files => {
-    const paths = Array.from(files).slice(0, 200).map(file => { try { return webUtils.getPathForFile(file) } catch { return '' } }).filter(Boolean)
+    const paths = droppedPaths(files)
     return paths.length ? ipcRenderer.invoke('photo:drop', paths) : Promise.resolve({ ok: false, error: '끌어 놓은 항목에서 파일을 찾지 못했습니다.' })
+  },
+  importDroppedStickers: files => {
+    const paths = droppedPaths(files)
+    return paths.length ? ipcRenderer.invoke('library:drop', paths) : Promise.resolve({ ok: false, error: '끌어 놓은 항목에서 파일을 찾지 못했습니다.' })
   },
   removePhoto: id => ipcRenderer.invoke('photo:remove', id),
   gifToolStatus: () => ipcRenderer.invoke('gif:tool-status'),

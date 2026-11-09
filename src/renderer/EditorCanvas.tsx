@@ -20,6 +20,8 @@ interface Props {
   /** When true, dragging on the photo draws a new blur region instead of selecting. */
   drawMode?: boolean
   onDraw?(value: Placement): void
+  /** Buttons shown in a small bar floating above the selected item. */
+  selectionTools?: ReactNode
 }
 type Draft = { start: { x: number; y: number }; end: { x: number; y: number }; circle: boolean }
 function draftPlacement(draft: Draft, photo: { width: number; height: number }): Placement {
@@ -34,7 +36,7 @@ function draftPlacement(draft: Draft, photo: { width: number; height: number }):
   const y = draft.start.y + Math.sign(draft.end.y - draft.start.y || 1) * height / 2
   return { x, y, width: Math.max(4, width), height: Math.max(4, height), rotation: 0 }
 }
-export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChange, info, drawMode = false, onDraw }: Props) {
+export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChange, info, drawMode = false, onDraw, selectionTools }: Props) {
   const area = useRef<HTMLDivElement>(null)
   const images = useRef(new Map<string, Konva.Node>())
   const [draft, setDraft] = useState<Draft | null>(null)
@@ -111,6 +113,18 @@ export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChang
     setPan(constrain({ x: target.x - (origin.x - position.x) / scale * nextScale, y: target.y - (origin.y - position.y) / scale * nextScale }, nextScale))
     setZoom(nextScale)
   }
+  // Floating bar: screen box of the selected item's rotated bounds, placed above it (or below near the top edge).
+  const selected = scene.stickers.find(item => item.id === scene.selectedId) ?? scene.regions.find(item => item.id === scene.selectedId)
+  let toolbarAt: { left: number; top: number } | null = null
+  if (selected && selectionTools && !moving && !panMode && !drawMode && !disabled) {
+    const angle = selected.rotation * Math.PI / 180, cos = Math.abs(Math.cos(angle)), sin = Math.abs(Math.sin(angle))
+    const halfH = (selected.width * sin + selected.height * cos) / 2
+    const cx = selected.x * scale + position.x, top = (selected.y - halfH) * scale + position.y, bottom = (selected.y + halfH) * scale + position.y
+    // Below the box by default: the rotation handle owns the ~50px above it. Above (clear of that handle) only when there is no room below.
+    const below = bottom + 14, above = top - 100
+    const y = below + 36 <= viewport.height ? below : above >= 4 ? above : Math.max(4, viewport.height - 40)
+    toolbarAt = { left: Math.max(90, Math.min(viewport.width - 90, cx)), top: y }
+  }
   const deselect = (event: Konva.KonvaEventObject<Event>) => {
     if (!disabled && !panMode && !drawMode && event.target === event.target.getStage()) onSelect(null)
   }
@@ -136,6 +150,8 @@ export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChang
     <div ref={area} className="canvas-area" data-testid="canvas-area" tabIndex={0} aria-label="사진 편집 캔버스"
     onMouseDownCapture={() => area.current?.focus({ preventScroll: true })}>
     <div className="canvas-frame" data-testid="canvas-frame" data-scale={scale} data-pan-x={position.x} data-pan-y={position.y} style={{ cursor: panMode ? 'grab' : drawMode ? 'crosshair' : undefined }}>
+      {toolbarAt && <div className="selection-bar" role="toolbar" aria-label="선택 항목 도구" style={{ left: toolbarAt.left, top: toolbarAt.top }}
+        onMouseDown={event => event.stopPropagation()}>{selectionTools}</div>}
       <Stage ref={stage} width={viewport.width} height={viewport.height} x={position.x} y={position.y} scaleX={scale} scaleY={scale}
         draggable={panMode && !disabled} dragBoundFunc={point => constrain(point)}
         onDragEnd={event => { if (event.target === stage.current) setPan(constrain(event.target.position())) }}
@@ -165,8 +181,8 @@ export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChang
               offsetX={placement.width / 2} offsetY={placement.height / 2} rotation={placement.rotation}
               draggable={interactive} listening={interactive}
               onMouseDown={() => onSelect(placement.id)} onTouchStart={() => onSelect(placement.id)}
-              onDragStart={() => onSelect(placement.id)}
-              onDragEnd={event => onChange(placement.id, { ...placement, x: event.target.x(), y: event.target.y() })}
+              onDragStart={() => { onSelect(placement.id); setMoving(placement.id) }} onTransformStart={() => setMoving(placement.id)}
+              onDragEnd={event => { setMoving(null); onChange(placement.id, { ...placement, x: event.target.x(), y: event.target.y() }) }}
               onTransformEnd={() => transformEnd(placement.id)} />)}
             {draft && (() => { const value = draftPlacement(draft, photo); return <Ellipse x={value.x} y={value.y} radiusX={value.width / 2} radiusY={value.height / 2}
               fill="rgba(91,69,201,0.2)" stroke="#ffffff" strokeWidth={1.5} dash={[6, 4]} strokeScaleEnabled={false} listening={false} /> })()}
@@ -182,12 +198,12 @@ export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChang
     </div>
   </div>
     <div className="view-tools" aria-label="보기 조작">
-      <button disabled={disabled} onClick={() => { setZoom(null); setPan({ x: 0, y: 0 }); setPanMode(false) }}>화면 맞춤</button>
+      <button className="icon" disabled={disabled} aria-label="화면 맞춤" title="화면 맞춤" onClick={() => { setZoom(null); setPan({ x: 0, y: 0 }); setPanMode(false) }}><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/></svg></button>
       <button disabled={disabled} onClick={() => changeZoom(scale / 1.25)} aria-label="축소">−</button>
       <span className="zoom" data-testid="zoom-level" title="Ctrl/Cmd+휠로 확대·축소">{Math.round(scale * 100)}%</span>
       <button disabled={disabled} onClick={() => changeZoom(scale * 1.25)} aria-label="확대">+</button>
       <button disabled={disabled} onClick={() => changeZoom(1)}>100%</button>
-      <button disabled={disabled} aria-pressed={panMode} onClick={() => setPanMode(!panMode)}>화면 이동</button>
+      <button className="icon" disabled={disabled} aria-label="화면 이동" title="화면 이동 — 켜면 드래그로 확대한 사진을 움직입니다" aria-pressed={panMode} onClick={() => setPanMode(!panMode)}><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 1.5v13M1.5 8h13M8 1.5 6 3.5M8 1.5l2 2M8 14.5l-2-2M8 14.5l2-2M1.5 8l2-2M1.5 8l2 2M14.5 8l-2-2M14.5 8l-2 2"/></svg></button>
       <span className="canvas-info">{info}</span>
     </div>
   </section>

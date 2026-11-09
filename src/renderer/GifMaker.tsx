@@ -202,6 +202,7 @@ export function GifMaker({ incoming, outputFolder, onSaved, onStatus, onError, o
       </dl>
       {span > 10 && <p className="hint">10초가 넘으면 GIF 용량이 커집니다. 너비나 FPS를 낮춰 보세요.</p>}
       {!valid && <p role="alert">구간은 0.1~{MAX_GIF_SECONDS}초, 프레임은 600개 이하여야 합니다.</p>}
+      <div className="gif-footer">
       <div className="gif-output">
         <span>출력 폴더</span>
         <span className="folder-name" title={outputFolder ?? undefined}>{outputFolder ?? '미지정 · 저장 시 선택'}</span>
@@ -211,6 +212,7 @@ export function GifMaker({ incoming, outputFolder, onSaved, onStatus, onError, o
         <button onClick={() => { void api.cancelGif() }}>취소</button>
       </div> : <button className="primary gif-save" disabled={busy || !valid} onClick={create}>GIF로 저장</button>}
       <p className="hint">원본 동영상은 바꾸지 않고 <b>원본이름_kkumi.gif</b>로 새로 저장합니다. 원본보다 크게 늘리지 않습니다.</p>
+      </div>
     </aside>
   </div>
 }

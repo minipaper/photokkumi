@@ -309,6 +309,16 @@ app.whenReady().then(() => {
       const selected = await dialog.showOpenDialog(win!, { title: 'PNG 스티커 등록', properties: ['openFile', 'multiSelections'], filters: [{ name: 'PNG', extensions: ['png'] }] })
       return selected.canceled ? null : library.importFiles(selected.filePaths)
     },
+    // Dropped PNGs: only plain regular files; the library decodes and validates each one like a dialog import.
+    'library:drop': async paths => {
+      const pngs: string[] = [], rejected: string[] = []
+      for (const path of paths as string[]) {
+        try { const info = await lstat(path); if (!info.isFile() || extname(path).toLowerCase() !== '.png') throw new Error('not png'); pngs.push(path) }
+        catch { rejected.push(basename(path)) }
+      }
+      if (!pngs.length) throw new Error('끌어 놓은 항목에 PNG 파일이 없습니다. 스티커는 투명 배경 PNG만 등록할 수 있습니다.')
+      return { ...(await library.importFiles(pngs)), rejected }
+    },
     'library:use': async id => {
       if (!photos.list().length) throw new Error('사진을 먼저 열어주세요.')
       const bytes = await library.read(id as string)
@@ -334,8 +344,9 @@ app.whenReady().then(() => {
   for (const [channel, action] of Object.entries(libraryActions)) {
     ipcMain.handle(channel, async (event, ...args: unknown[]): Promise<Result<unknown>> => {
       if (!win || !trustedSender(event.sender.id, win.webContents.id, event.senderFrame === win.webContents.mainFrame, event.senderFrame?.url ?? '', pageUrl)) return { ok: false, error: '허용되지 않은 요청입니다.' }
-      const count = channel === 'library:update' ? 2 : ['library:use', 'library:delete'].includes(channel) ? 1 : 0
-      if (args.length !== count || (count > 0 && !validAssetId(args[0])) || (count === 2 && !validMetadata(args[1]))) return { ok: false, error: '유효하지 않은 라이브러리 요청입니다.' }
+      const count = channel === 'library:update' ? 2 : ['library:use', 'library:delete', 'library:drop'].includes(channel) ? 1 : 0
+      const validArgs = channel === 'library:drop' ? validDroppedPaths(args[0]) : (count === 0 || validAssetId(args[0])) && (count !== 2 || validMetadata(args[1]))
+      if (args.length !== count || !validArgs) return { ok: false, error: '유효하지 않은 라이브러리 요청입니다.' }
       if (busy) return { ok: false, error: '현재 작업이 끝난 뒤 다시 시도하세요.' }
       busy = true
       try { await loadedLibrary; return { ok: true, value: await action(...args) } }

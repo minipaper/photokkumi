@@ -32,7 +32,10 @@ function App() {
   const [libraryOpen, setLibraryOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const settingsAnchor = useRef<HTMLDivElement>(null)
-  const [dragging, setDragging] = useState(false)
+  const [dragging, setDragging] = useState<false | 'photos' | 'stickers'>(false)
+  // Numeric position fields stay folded until wanted; the choice is a per-viewer convenience.
+  const [fieldsOpen, setFieldsOpen] = useState(() => { try { return localStorage.getItem('pk.placementFields') === 'open' } catch { return false } })
+  const toggleFields = () => setFieldsOpen(open => { try { localStorage.setItem('pk.placementFields', open ? 'closed' : 'open') } catch { /* storage unavailable */ } return !open })
   const dragDepth = useRef(0)
   const libraryDialog = useRef<HTMLDialogElement>(null)
   const [photos, setPhotos] = useState<PhotoInfo[]>([])
@@ -104,7 +107,7 @@ function App() {
     if (!activeId.current) return
     sessions.current.set(activeId.current, editPhotoSession(sessions.current.get(activeId.current)!, next))
     currentHistory.current = next; setHistory(next)
-    setDirty(true); setStatus('수정됨 · 저장이 필요합니다.')
+    setDirty(true); setStatus('')
     void syncReferences().catch(value => setError(String(value)))
   }
   function editScene(next: Scene) { liveBase.current = null; applyHistory(commitScene(currentHistory.current, next)) }
@@ -205,6 +208,13 @@ function App() {
     const result = await window.photokkumi.importStickers()
     if (!result.ok) throw new Error(result.error)
     if (result.value) { setLibraryItems(result.value.stickers); setStatus('스티커를 등록했습니다. 같은 PNG는 중복 등록하지 않습니다.') }
+  })
+  const importDroppedStickers = (files: File[]) => run(async () => {
+    const result = await window.photokkumi.importDroppedStickers(files)
+    if (!result.ok) throw new Error(result.error)
+    const { stickers, importedIds, rejected } = result.value
+    setLibraryItems(stickers)
+    setStatus(`스티커 ${importedIds.length}개를 등록했습니다. 같은 PNG는 중복 등록하지 않습니다.${rejected.length ? ` PNG가 아닌 항목 ${rejected.length}개 제외: ${rejected.slice(0, 3).join(', ')}${rejected.length > 3 ? ' 외' : ''}` : ''}`)
   })
   const backupLibrary = () => run(async () => {
     const result = await window.photokkumi.backupLibrary()
@@ -433,18 +443,30 @@ function App() {
   const canSave = !busy && !!photo && outputLoaded && !outputError
   const hasFiles = (event: DragEvent) => Array.from(event.dataTransfer.types).includes('Files')
   const dropBlocked = busy || gifBusy || !!pendingPhoto || !!closeRequest || libraryOpen
+  // Files dropped on the sticker library register as stickers; anywhere else they open as photos/videos.
+  const dropZone = (event: DragEvent): 'photos' | 'stickers' => mode === 'photo' && sideTab === 'stickers' && (event.target as Element).closest?.('.library-pane') ? 'stickers' : 'photos'
+  const editTools = selection ? <>
+    <button className="icon" aria-label="선택 복제" title="복제 (Ctrl+D)" onClick={duplicate}><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h.5"/></svg></button>
+    {placement && <>
+      <button className="icon" aria-label="위로" title="한 단계 위로 (다른 스티커 위에 겹치기)" disabled={placement.zOrder === scene.stickers.length - 1} onClick={() => editScene(reorderSelected(currentHistory.current.present, 1))}><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="2.5" y="6.5" width="7" height="7" rx="1" strokeDasharray="2 1.6"/><rect x="6.5" y="2.5" width="7" height="7" rx="1" fill="currentColor" fillOpacity=".25"/></svg></button>
+      <button className="icon" aria-label="아래로" title="한 단계 아래로 (다른 스티커 밑으로)" disabled={placement.zOrder === 0} onClick={() => editScene(reorderSelected(currentHistory.current.present, -1))}><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="6.5" y="2.5" width="7" height="7" rx="1"/><rect x="2.5" y="6.5" width="7" height="7" rx="1" fill="currentColor" fillOpacity=".25" strokeDasharray="2 1.6"/></svg></button>
+    </>}
+    <button className="icon danger" aria-label="선택 삭제" title="삭제 (Delete)" onClick={() => editScene(removeSelected(currentHistory.current.present))}><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2.5 4.5h11M6.5 4.5V3a.5.5 0 0 1 .5-.5h2a.5.5 0 0 1 .5.5v1.5M4 4.5l.7 8.6a1 1 0 0 0 1 .9h4.6a1 1 0 0 0 1-.9l.7-8.6"/></svg></button>
+  </> : null
   return <main onKeyDown={handleEditorKey}
-    onDragEnter={event => { if (!hasFiles(event)) return; event.preventDefault(); dragDepth.current++; setDragging(true) }}
-    onDragOver={event => { if (!hasFiles(event)) return; event.preventDefault(); event.dataTransfer.dropEffect = dropBlocked ? 'none' : 'copy' }}
+    onDragEnter={event => { if (!hasFiles(event)) return; event.preventDefault(); dragDepth.current++; setDragging(dropZone(event)) }}
+    onDragOver={event => { if (!hasFiles(event)) return; event.preventDefault(); event.dataTransfer.dropEffect = dropBlocked ? 'none' : 'copy'; const zone = dropZone(event); if (dragging !== zone) setDragging(zone) }}
     onDragLeave={event => { if (!hasFiles(event)) return; dragDepth.current = Math.max(0, dragDepth.current - 1); if (!dragDepth.current) setDragging(false) }}
     onDrop={event => {
       if (!hasFiles(event)) return
       event.preventDefault(); dragDepth.current = 0; setDragging(false)
       if (dropBlocked) { setStatus('진행 중인 작업이나 열린 창을 닫은 뒤 다시 끌어 놓으세요.'); return }
       const files = Array.from(event.dataTransfer.files)
-      if (files.length) void importDropped(files)
+      if (files.length) void (dropZone(event) === 'stickers' ? importDroppedStickers(files) : importDropped(files))
     }}>
-    {dragging && <div className="drop-overlay" aria-hidden="true"><div><strong>여기에 놓으면 불러옵니다</strong><span>JPG·PNG 사진 또는 사진이 든 폴더</span></div></div>}
+    {dragging && <div className={`drop-overlay ${dragging}`} aria-hidden="true">{dragging === 'stickers'
+      ? <div><strong>놓으면 스티커로 등록합니다</strong><span>투명 배경 PNG 파일</span></div>
+      : <div><strong>여기에 놓으면 불러옵니다</strong><span>JPG·PNG 사진, 사진이 든 폴더, MOV·MP4 동영상 · 스티커 목록 위에 놓으면 스티커로 등록</span></div>}</div>}
     <dialog ref={libraryDialog} className="library-dialog" aria-label="스티커 관리" onCancel={event => { event.preventDefault(); closeLibrary() }}>
       {libraryOpen && <>
         <div className="manager-heading"><h2>스티커 관리</h2><button disabled={busy} onClick={closeLibrary}>관리 닫기</button></div>
@@ -488,7 +510,7 @@ function App() {
       </div>
       <div className="toolbar-group">
         <button className="draw-toggle" aria-label="블러·모자이크" aria-pressed={drawMode} disabled={busy || !photo} title="블러·모자이크 영역 그리기 — 드래그, Shift: 정원, 클릭: 기본 원, Esc: 취소" onClick={() => { setDrawMode(mode => !mode); setSideTab('stickers') }}>
-          <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="2.4 1.8"><ellipse cx="8" cy="8" rx="6.5" ry="5.5" /></svg><span className="label"> 블러·모자이크</span>
+          <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="2.4 1.8"><ellipse cx="8" cy="8" rx="6.5" ry="5.5" /></svg><span className="label"> 블러·모자이크</span><span className="label-short"> 블러</span>
         </button>
       </div>
       <div className="toolbar-spacer" />
@@ -529,7 +551,7 @@ function App() {
     </div>
     <section className="workspace" hidden={mode !== 'photo'}>
       <div className="canvas-column">
-        {photo ? <EditorCanvas key={photo.id} photo={photo} assets={assets.current} scene={scene} disabled={busy} onSelect={selectInstance} onChange={(id, value) => change(value, id)}
+        {photo ? <EditorCanvas key={photo.id} photo={photo} assets={assets.current} scene={scene} disabled={busy} onSelect={selectInstance} onChange={(id, value) => change(value, id)} selectionTools={editTools}
           drawMode={drawMode} onDraw={drawRegion}
           info={<>{photo.name} · {photo.width} × {photo.height} px{outputLabel && outputLabel !== `${photo.width} × ${photo.height} px` ? ` → ${outputLabel}` : ''} · <b className={dirty ? 'dirty' : ''}>{dirty ? '수정됨' : '원본 / 저장됨'}</b></>} />
           : <div className="empty"><div className="drop-target"><strong>사진을 이 창으로 끌어다 놓으세요</strong><span>탐색기에서 JPG·PNG 사진 여러 장이나 폴더를 한 번에 끌어 놓으면 바로 불러옵니다.</span><span>또는 위의 <b>사진 열기</b> · <b>폴더 열기</b></span></div></div>}
@@ -557,10 +579,10 @@ function App() {
           </div>
           <p className="hint">{photo ? '보정은 사진에만 적용되고 스티커에는 적용되지 않습니다. 슬라이더를 두 번 클릭하면 0으로 돌아갑니다.' : '사진을 열면 노출·대비·채도·색온도를 조절할 수 있습니다.'}</p>
         </section> : <>
-        <div className="library-pane" hidden={libraryOpen}><LibraryPanel {...libraryProps} mode="pick" onManage={() => setLibraryOpen(true)} /></div>
-        <section className="placed" aria-label="배치한 스티커">
+        <div className={`library-pane${dragging === 'stickers' ? ' drop-here' : ''}`} hidden={libraryOpen}><LibraryPanel {...libraryProps} mode="pick" onManage={() => setLibraryOpen(true)} /></div>
+        {photo && <section className="placed" aria-label="올린 항목">
           <div className="pane-heading">
-            <h2>배치한 스티커 <small><span data-testid="instance-count">{scene.stickers.length}</span>/200{!!scene.regions.length && <> · 가림 <span data-testid="region-count">{scene.regions.length}</span></>}</small></h2>
+            <h2>올린 항목 <small>스티커 <span data-testid="instance-count">{scene.stickers.length}</span>{!!scene.regions.length && <> · 가림 <span data-testid="region-count">{scene.regions.length}</span></>}</small></h2>
             <button className="link" disabled={busy || !(referencedAssetsForCurrent.length || scene.regions.length || history.past.length || history.future.length)} onClick={clearScene}>배치·이력 비우기</button>
           </div>
           {!!(scene.stickers.length || scene.regions.length) && <div className="instance-list" aria-label="사진의 스티커 목록">
@@ -585,22 +607,19 @@ function App() {
             </label>
             {drawMode && !region && <p className="hint">사진 위를 드래그해 영역을 그리세요. Shift는 정원, 클릭만 하면 기본 원, Esc는 취소입니다.</p>}
           </div>}
-          <div className="instance-tools">
-            <button disabled={busy || !selection} onClick={duplicate} title="Ctrl+D">선택 복제</button>
-            <button disabled={busy || !selection} onClick={() => editScene(removeSelected(currentHistory.current.present))} title="Delete">선택 삭제</button>
-            <button disabled={busy || !placement || placement.zOrder === 0} onClick={() => editScene(reorderSelected(currentHistory.current.present, -1))}>뒤로</button>
-            <button disabled={busy || !placement || placement.zOrder === scene.stickers.length - 1} onClick={() => editScene(reorderSelected(currentHistory.current.present, 1))}>앞으로</button>
-          </div>
-          {selection ? <fieldset className="placement-fields" disabled={busy} title="원본 픽셀 기준">
-            <label>X<input aria-label="중심 X" type="number" value={Math.round(selection.x * 100) / 100} onChange={e => change({ ...selection, x: e.target.valueAsNumber })} /></label>
-            <label>Y<input aria-label="중심 Y" type="number" value={Math.round(selection.y * 100) / 100} onChange={e => change({ ...selection, y: e.target.valueAsNumber })} /></label>
-            {region ? <>
-              <label>너비<input aria-label="영역 너비" type="number" min="1" max="32768" value={Math.round(region.width * 100) / 100} onChange={e => change({ ...region, width: e.target.valueAsNumber })} /></label>
-              <label>높이<input aria-label="영역 높이" type="number" min="1" max="32768" value={Math.round(region.height * 100) / 100} onChange={e => change({ ...region, height: e.target.valueAsNumber })} /></label>
-            </> : <label>너비<input aria-label="스티커 너비" type="number" min="1" max="32768" value={Math.round(selection.width * 100) / 100} onChange={e => change({ ...selection, width: e.target.valueAsNumber, height: e.target.valueAsNumber * selection.height / selection.width })} /></label>}
-            <label>회전<input aria-label="회전" type="number" value={Math.round(selection.rotation * 100) / 100} onChange={e => change({ ...selection, rotation: e.target.valueAsNumber })} /></label>
-          </fieldset> : drawMode ? null : <p className="hint">{photo ? '스티커를 클릭해 선택하면 위치·크기·회전을 조정할 수 있습니다. 방향키 1px, Shift+방향키 10px 이동.' : '사진을 열고 위 라이브러리에서 스티커를 누르면 배치됩니다.'}</p>}
-        </section>
+          {selection ? <div className="placement-detail">
+            <button className="disclosure" aria-expanded={fieldsOpen} onClick={toggleFields}><span className="chevron" aria-hidden="true">▸</span>위치·크기 숫자로 조정</button>
+            {fieldsOpen && <fieldset className="placement-fields" disabled={busy} title="원본 픽셀 기준">
+              <label>X<input aria-label="중심 X" type="number" value={Math.round(selection.x)} onChange={e => change({ ...selection, x: e.target.valueAsNumber })} /></label>
+              <label>Y<input aria-label="중심 Y" type="number" value={Math.round(selection.y)} onChange={e => change({ ...selection, y: e.target.valueAsNumber })} /></label>
+              {region ? <>
+                <label>너비<input aria-label="영역 너비" type="number" min="1" max="32768" value={Math.round(region.width)} onChange={e => change({ ...region, width: e.target.valueAsNumber })} /></label>
+                <label>높이<input aria-label="영역 높이" type="number" min="1" max="32768" value={Math.round(region.height)} onChange={e => change({ ...region, height: e.target.valueAsNumber })} /></label>
+              </> : <label>너비<input aria-label="스티커 너비" type="number" min="1" max="32768" value={Math.round(selection.width)} onChange={e => change({ ...selection, width: e.target.valueAsNumber, height: e.target.valueAsNumber * selection.height / selection.width })} /></label>}
+              <label>회전<input aria-label="회전" type="number" value={Math.round(selection.rotation)} onChange={e => change({ ...selection, rotation: e.target.valueAsNumber })} /></label>
+            </fieldset>}
+          </div> : drawMode ? null : <p className="hint">스티커를 클릭하면 사진 위에 복제·순서·삭제 버튼이 나타납니다. 방향키 1px, Shift+방향키 10px 이동.</p>}
+        </section>}
         </>}
       </aside>
     </section>
@@ -625,7 +644,7 @@ function App() {
         })}
       </div>
     </section>}
-    <footer className="statusbar"><p role="status" aria-live="polite">{status}</p>{error && !libraryOpen && !pendingPhoto && <p role="alert">{error}</p>}</footer>
+    <footer className="statusbar"><p role="status" aria-live="polite">{status || (mode === 'photo' && photo ? <span className="shortcuts">Ctrl+Z 실행 취소 · Ctrl+D 복제 · Delete 삭제 · 방향키 이동 · Ctrl+휠 확대</span> : '')}</p>{error && !libraryOpen && !pendingPhoto && <p role="alert">{error}</p>}</footer>
   </main>
 }
 createRoot(document.getElementById('root')!).render(<App />)

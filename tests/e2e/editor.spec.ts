@@ -26,8 +26,14 @@ async function settings() {
   const toggle = page.getByRole('button', { name: /^저장 설정/ })
   if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click()
 }
-async function field(name: string, value: number) { await page.getByRole('spinbutton', { name, exact: true }).fill(String(value)) }
-async function value(name: string) { return Number(await page.getByRole('spinbutton', { name, exact: true }).inputValue()) }
+/** The numeric placement fields are folded by default; open them once (the choice persists). */
+async function openFields() {
+  const toggle = page.getByRole('button', { name: '위치·크기 숫자로 조정', exact: true })
+  if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click()
+}
+const placementFields = ['중심 X', '중심 Y', '스티커 너비', '영역 너비', '영역 높이', '회전']
+async function field(name: string, value: number) { if (placementFields.includes(name)) await openFields(); await page.getByRole('spinbutton', { name, exact: true }).fill(String(value)) }
+async function value(name: string) { if (placementFields.includes(name)) await openFields(); return Number(await page.getByRole('spinbutton', { name, exact: true }).inputValue()) }
 async function output(name = '한글 사진_kkumi.png') { return PNG.sync.read(await readFile(join(directory, name))) }
 function pixel(image: PNG, x: number, y: number) { return [...image.data.subarray((image.width * y + x) * 4, (image.width * y + x) * 4 + 4)] }
 async function save() {
@@ -54,6 +60,7 @@ async function load() {
   await expect(page.getByRole('button', { name: 'PNG로 저장' })).toBeEnabled()
   await register(stickerPath)
   await page.getByRole('button', { name: '투명 스티커 배치', exact: true }).click()
+  await openFields()
   await expect(page.getByRole('spinbutton', { name: '스티커 너비' })).toBeVisible()
 }
 async function failNextOutput() {
@@ -166,7 +173,7 @@ test('저장 실패·취소와 스티커 선택 취소가 편집을 보존하고
   await expect(page.getByRole('spinbutton', { name: '회전', exact: true })).toHaveValue('35')
   await save()
   await field('회전', 50)
-  await expect(page.getByRole('status')).toContainText('수정됨')
+  await expect(page.locator('.canvas-info')).toContainText('수정됨')
 })
 
 test('안전한 창 설정·IPC 거부·잘못된 이미지 거부', async () => {
@@ -176,12 +183,13 @@ test('안전한 창 설정·IPC 거부·잘못된 이미지 거부', async () =>
     return { sandbox: p.sandbox, contextIsolation: p.contextIsolation, nodeIntegration: p.nodeIntegration }
   })
   expect(prefs).toEqual({ sandbox: true, contextIsolation: true, nodeIntegration: false })
-  expect(await page.evaluate(() => Object.keys(window.photokkumi).sort())).toEqual(['backupLibrary', 'cancelGif', 'chooseGifTool', 'chooseOutputFolder', 'choosePhotoFolder', 'choosePhotos', 'createGif', 'deleteSticker', 'getOutputSettings', 'gifToolStatus', 'importDroppedFiles', 'importStickers', 'listStickers', 'loadVideo', 'locateGifTool', 'onCloseRequested', 'onGifProgress', 'openVideo', 'readPhoto', 'removePhoto', 'resolveClose', 'restoreLibrary', 'saveImage', 'setStickerReferences', 'updateOutputSettings', 'updateSticker', 'useSticker'])
+  expect(await page.evaluate(() => Object.keys(window.photokkumi).sort())).toEqual(['backupLibrary', 'cancelGif', 'chooseGifTool', 'chooseOutputFolder', 'choosePhotoFolder', 'choosePhotos', 'createGif', 'deleteSticker', 'getOutputSettings', 'gifToolStatus', 'importDroppedFiles', 'importDroppedStickers', 'importStickers', 'listStickers', 'loadVideo', 'locateGifTool', 'onCloseRequested', 'onGifProgress', 'openVideo', 'readPhoto', 'removePhoto', 'resolveClose', 'restoreLibrary', 'saveImage', 'setStickerReferences', 'updateOutputSettings', 'updateSticker', 'useSticker'])
   expect(await page.evaluate(() => typeof (window as unknown as { require?: unknown }).require)).toBe('undefined')
   const invalid = await page.evaluate(() => window.photokkumi.saveImage({ photoId: '../../anything', png: new Uint8Array(), output: { format: 'png', resizeEnabled: false, resizeBasis: 'width', landscapeSize: 1600, portraitSize: 900, preventUpscale: true, quality: 100 } }))
   expect(invalid.ok).toBe(false)
   expect((await page.evaluate(() => window.photokkumi.resolveClose({ requestId: 'forged', action: 'close' }))).ok).toBe(false)
   expect((await page.evaluate(() => window.photokkumi.importDroppedFiles([new File(['x'], '/etc/passwd')]))).ok).toBe(false)
+  expect((await page.evaluate(() => window.photokkumi.importDroppedStickers([new File(['x'], '/etc/passwd')]))).ok).toBe(false)
   expect((await page.evaluate(() => window.photokkumi.removePhoto('../../anything'))).ok).toBe(false)
   expect((await page.evaluate(() => window.photokkumi.loadVideo('../../etc/passwd'))).ok).toBe(false)
   expect((await page.evaluate(() => window.photokkumi.loadVideo('00000000-0000-4000-8000-000000000000'))).ok).toBe(false)
@@ -366,6 +374,7 @@ test('라이브러리 다중 등록·중복·메타데이터·원본 이동·재
   await closeManager()
   await select(source); await page.getByRole('button', { name: '사진 열기', exact: true }).click()
   await page.getByRole('button', { name: '양 배치', exact: true }).click()
+  await openFields()
   await expect(page.getByRole('spinbutton', { name: '스티커 너비' })).toBeVisible()
   await openManager()
   await expect(page.getByRole('button', { name: '양 삭제', exact: true })).toBeDisabled()
@@ -527,7 +536,7 @@ test('동일 스티커 여러 개와 다른 스티커는 독립 편집·겹침·
   expect(pixel(image, 220, 230)).toEqual([0, 255, 0, 255])
   expect(pixel(image, 490, 190)).toEqual([240, 180, 0, 255])
   await expect.poll(() => previewPixel(490, 190)).toEqual([240, 180, 0, 255])
-  await page.getByRole('button', { name: '뒤로', exact: true }).click()
+  await page.getByRole('button', { name: '아래로', exact: true }).click()
   await save()
   image = await output('한글 사진_kkumi_1.png')
   expect(pixel(image, 490, 190)).toEqual([255, 0, 0, 255])
@@ -957,6 +966,8 @@ test('최소 창 크기에서도 페이지·우측 패널은 스크롤하지 않
   await select(source); await page.getByRole('button', { name: '사진 열기', exact: true }).click()
   await register(paths)
   await page.getByRole('button', { name: '도형0 배치', exact: true }).click()
+  // Worst case for the panel height: numeric fields unfolded.
+  await openFields()
   await expect(page.getByRole('spinbutton', { name: '스티커 너비' })).toBeVisible()
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(760, 580))
   await expect.poll(() => page.evaluate(() => window.innerHeight)).toBe(580)
@@ -975,18 +986,18 @@ test('최소 창 크기에서도 페이지·우측 패널은 스크롤하지 않
   await expect(page.getByRole('spinbutton', { name: '스티커 너비' })).toBeInViewport()
 })
 
-async function drop(paths: string[]) {
+async function drop(paths: string[], selector = 'main') {
   // setInputFiles yields file-backed File objects, the same kind the OS file manager provides on drop.
   await page.evaluate(() => { const input = document.createElement('input'); input.type = 'file'; input.multiple = true; input.id = 'drop-source'; input.hidden = true; document.body.append(input) })
   await page.locator('#drop-source').setInputFiles(paths)
-  await page.evaluate(() => {
+  await page.evaluate(selector => {
     const input = document.getElementById('drop-source') as HTMLInputElement, transfer = new DataTransfer()
     for (const file of Array.from(input.files ?? [])) transfer.items.add(file)
-    const target = document.querySelector('main')!
+    const target = document.querySelector(selector)!
     target.dispatchEvent(new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: transfer }))
     target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }))
     input.remove()
-  })
+  }, selector)
 }
 
 test('탐색기에서 끌어 놓은 사진은 목록에 추가되고 썸네일에서 제거할 수 있다', async () => {
@@ -1018,6 +1029,41 @@ test('탐색기에서 끌어 놓은 사진은 목록에 추가되고 썸네일�
   await expect(page.getByRole('button', { name: 'PNG로 저장' })).toBeDisabled()
   await drop([second])
   await expect(page.getByRole('button', { name: '사진 1: 두 번째.png', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  expect(errors).toEqual([])
+})
+
+test('빈 라이브러리는 바로 등록 버튼을 보여 주고, 스티커 목록에 끌어 놓은 PNG는 스티커로 등록된다', async () => {
+  const memo = join(directory, '메모.txt'); await writeFile(memo, 'memo')
+  // Without a photo the placed-items panel stays out of the way; the empty library offers a direct import.
+  await expect(page.getByRole('region', { name: '올린 항목' })).toHaveCount(0)
+  await select(stickerPath); await page.getByRole('button', { name: '스티커 PNG 추가', exact: true }).click()
+  await expect(page.getByRole('button', { name: '투명 스티커 배치', exact: true })).toBeVisible()
+  await openManager(); await page.getByRole('button', { name: '투명 스티커 삭제', exact: true }).click()
+  await page.getByRole('button', { name: '삭제 확인', exact: true }).click(); await closeManager()
+  await expect(page.getByRole('button', { name: '스티커 PNG 추가', exact: true })).toBeVisible()
+
+  await drop([stickerPath, memo], '.library-pane .library')
+  await expect(page.getByRole('button', { name: '투명 스티커 배치', exact: true })).toBeVisible()
+  await expect(page.getByRole('status')).toContainText('스티커 1개를 등록')
+  await expect(page.getByRole('status')).toContainText('메모.txt')
+  // A sticker drop must not open the PNG as a photo.
+  await expect(page.getByRole('region', { name: '사진 목록' })).toHaveCount(0)
+  await drop([memo], '.library-pane .library')
+  await expect(page.getByRole('alert')).toContainText('PNG 파일이 없습니다')
+
+  // The floating bar next to the selection carries duplicate/order/delete.
+  await drop([source])
+  await page.getByRole('button', { name: '투명 스티커 배치', exact: true }).click()
+  const bar = page.getByRole('toolbar', { name: '선택 항목 도구' })
+  await expect(bar).toBeVisible()
+  await bar.getByRole('button', { name: '선택 복제', exact: true }).click()
+  await expect(page.getByTestId('instance-count')).toHaveText('2')
+  await expect(bar.getByRole('button', { name: '위로', exact: true })).toBeDisabled()
+  await bar.getByRole('button', { name: '아래로', exact: true }).click()
+  await bar.getByRole('button', { name: '선택 삭제', exact: true }).click()
+  await expect(page.getByTestId('instance-count')).toHaveText('1')
+  // Numeric fields stay folded until asked for.
+  await expect(page.getByRole('spinbutton', { name: '중심 X', exact: true })).toHaveCount(0)
   expect(errors).toEqual([])
 })
 

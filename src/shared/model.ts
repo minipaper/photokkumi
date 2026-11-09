@@ -43,6 +43,8 @@ export interface PhotoApi {
   readPhoto(id: string): Promise<Result<ImageAsset>>
   choosePhotoFolder(): Promise<Result<PhotoBatch | null>>
   importDroppedFiles(files: File[]): Promise<Result<DropBatch>>
+  /** Registers PNGs dropped on the sticker library; non-PNG items come back in `rejected`. */
+  importDroppedStickers(files: File[]): Promise<Result<LibraryImportResult & { rejected: string[] }>>
   gifToolStatus(): Promise<Result<ToolStatus>>
   locateGifTool(): Promise<Result<ToolStatus>>
   chooseGifTool(): Promise<Result<ToolStatus | null>>

@@ -93,7 +93,8 @@ test.beforeEach(async () => {
   app = await electron.launch({ args: [resolve('out/main/index.js'), `--user-data-dir=${join(directory, 'profile')}`, ...scaleArgs], env: { ...process.env, ELECTRON_RENDERER_URL: '' } })
   page = await app.firstWindow()
   page.on('pageerror', error => errors.push(error.message))
-  await expect(page.getByRole('heading', { name: '포토꾸미', exact: true })).toBeVisible()
+  // The title is hidden below 960px (small CI screens at 200%), so wait for a control that is always shown.
+  await expect(page.getByRole('button', { name: '사진 열기', exact: true })).toBeVisible()
   if (typeof factor === 'number') expect(await page.evaluate(() => window.devicePixelRatio)).toBe(factor)
   await app.context().setOffline(true)
 })
@@ -352,7 +353,8 @@ async function restartWithLibrary() {
   app = await electron.launch({ args: [resolve('out/main/index.js'), `--user-data-dir=${join(directory, 'profile')}`], env: { ...process.env, ELECTRON_RENDERER_URL: '' } })
   page = await app.firstWindow()
   page.on('pageerror', error => errors.push(error.message))
-  await expect(page.getByRole('heading', { name: '포토꾸미', exact: true })).toBeVisible()
+  // The title is hidden below 960px (small CI screens at 200%), so wait for a control that is always shown.
+  await expect(page.getByRole('button', { name: '사진 열기', exact: true })).toBeVisible()
   await app.context().setOffline(true)
 }
 test('라이브러리 다중 등록·중복·메타데이터·원본 이동·재시작·클릭 배치·삭제 보호', async () => {
@@ -1233,7 +1235,8 @@ async function relaunch(env: Record<string, string>) {
   app = await electron.launch({ args: [resolve('out/main/index.js'), `--user-data-dir=${join(directory, 'profile')}`], env: { ...process.env, ELECTRON_RENDERER_URL: '', ...env } })
   page = await app.firstWindow()
   page.on('pageerror', error => errors.push(error.message))
-  await expect(page.getByRole('heading', { name: '포토꾸미', exact: true })).toBeVisible()
+  // The title is hidden below 960px (small CI screens at 200%), so wait for a control that is always shown.
+  await expect(page.getByRole('button', { name: '사진 열기', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: '사진 열기', exact: true })).toBeEnabled()
   await app.context().setOffline(true)
 }

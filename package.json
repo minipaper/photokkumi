@@ -1,6 +1,6 @@
 {
   "name": "photokkumi",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "사진 한 장과 PNG 스티커를 로컬에서 합성하는 Electron 앱",
   "main": "out/main/index.js",

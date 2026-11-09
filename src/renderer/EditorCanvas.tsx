@@ -3,6 +3,8 @@ import { Stage, Layer, Image as CanvasImage, Transformer, Group, Ellipse } from 
 import type Konva from 'konva'
 import type { BlurRegion, Placement } from '../shared/model'
 import { buildRegionPatch, ellipsePath, regionKey, type RegionPatch } from './regions'
+import { renderAdjusted, releaseCanvas } from './filters'
+import { isNeutral } from '../shared/filters'
 import type { Scene } from '../shared/scene'
 import { fitScale } from '../shared/model'
 // A bundled vector cursor keeps the rotation affordance crisp at high DPI.
@@ -37,18 +39,37 @@ export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChang
   const images = useRef(new Map<string, Konva.Node>())
   const [draft, setDraft] = useState<Draft | null>(null)
   const [moving, setMoving] = useState<string | null>(null)
-  const patchCache = useRef(new Map<string, { key: string; patch: RegionPatch | null }>())
+  // Adjusted photo: a reduced copy right away for live slider feedback, full resolution once input settles.
+  const [adjusted, setAdjusted] = useState<{ canvas: HTMLCanvasElement; full: boolean } | null>(null)
+  const adjustKey = JSON.stringify(scene.adjust)
+  useEffect(() => {
+    const adjust = JSON.parse(adjustKey) as Scene['adjust']
+    if (isNeutral(adjust)) { setAdjusted(null); return }
+    const quick = renderAdjusted(photo.bitmap, adjust, 1200)!
+    setAdjusted({ canvas: quick, full: quick.width === photo.width })
+    if (quick.width === photo.width) return
+    const timer = window.setTimeout(() => setAdjusted({ canvas: renderAdjusted(photo.bitmap, adjust)!, full: true }), 220)
+    return () => window.clearTimeout(timer)
+  }, [adjustKey, photo.bitmap, photo.width])
+  const shown = useRef<HTMLCanvasElement | null>(null)
+  useEffect(() => { if (shown.current && shown.current !== adjusted?.canvas) releaseCanvas(shown.current); shown.current = adjusted?.canvas ?? null }, [adjusted])
+  useEffect(() => () => releaseCanvas(shown.current), [])
+  const patchSource = adjusted?.full ? adjusted.canvas : isNeutral(scene.adjust) ? photo.bitmap : null
+  const patchCache = useRef({ source: null as unknown, entries: new Map<string, { key: string; patch: RegionPatch | null }>() })
   const patches = useMemo(() => {
-    const cache = patchCache.current, next = new Map<string, { key: string; patch: RegionPatch | null }>()
+    const cache = patchCache.current.source === patchSource ? patchCache.current.entries : new Map<string, { key: string; patch: RegionPatch | null }>()
+    // While the full-resolution adjusted photo is pending, keep the previous patches so hidden areas never flash.
+    if (!patchSource) return patchCache.current.entries
+    const next = new Map<string, { key: string; patch: RegionPatch | null }>()
     for (const region of scene.regions) {
       const key = regionKey(region), cached = cache.get(region.id)
-      next.set(region.id, cached && cached.key === key ? cached : { key, patch: buildRegionPatch(photo.bitmap, region) })
+      next.set(region.id, cached && cached.key === key ? cached : { key, patch: buildRegionPatch(patchSource, region) })
     }
-    for (const [id, entry] of cache) if (next.get(id) !== entry && entry.patch) { entry.patch.canvas.width = 0; entry.patch.canvas.height = 0 }
-    patchCache.current = next
+    for (const [id, entry] of patchCache.current.entries) if (next.get(id) !== entry && entry.patch) releaseCanvas(entry.patch.canvas)
+    patchCache.current = { source: patchSource, entries: next }
     return next
-  }, [scene.regions, photo.bitmap])
-  useEffect(() => () => { for (const entry of patchCache.current.values()) if (entry.patch) { entry.patch.canvas.width = 0; entry.patch.canvas.height = 0 } }, [])
+  }, [scene.regions, patchSource])
+  useEffect(() => () => { for (const entry of patchCache.current.entries.values()) releaseCanvas(entry.patch?.canvas) }, [])
   const selectedRegion = scene.regions.some(item => item.id === scene.selectedId)
   const stage = useRef<Konva.Stage>(null)
   const [zoom, setZoom] = useState<number | null>(null)
@@ -129,7 +150,7 @@ export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChang
         onTouchStart={deselect}>
         <Layer ref={layer => { layer?.getNativeCanvasElement().setAttribute('data-testid', 'photo-content') }}>
           <Group clipX={0} clipY={0} clipWidth={photo.width} clipHeight={photo.height}>
-            <CanvasImage image={photo.bitmap} width={photo.width} height={photo.height} listening={false} />
+            <CanvasImage image={adjusted?.canvas ?? photo.bitmap} width={photo.width} height={photo.height} listening={false} />
             {scene.regions.map(region => {
               const patch = patches.get(region.id)?.patch
               return patch && moving !== region.id ? <Group key={region.id} listening={false} clipFunc={context => ellipsePath(context, region)}>

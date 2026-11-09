@@ -5,10 +5,11 @@ import { validPlacement } from '../shared/model'
 import type { LibrarySticker, StickerMetadata } from '../shared/library'
 import { LibraryPanel } from './LibraryPanel'
 import { EditorCanvas } from './EditorCanvas'
-import { addInstance, addRegion, updateSelectedRegion, validStrength, updateSelected, removeSelected, duplicateSelected, reorderSelected, emptyHistory, commitScene, undoScene, redoScene, MAX_INSTANCES, MAX_DECODED_STICKER_PIXELS, type Scene, type SceneHistory } from '../shared/scene'
+import { addInstance, addRegion, setAdjustments, updateSelectedRegion, validStrength, updateSelected, removeSelected, duplicateSelected, reorderSelected, emptyHistory, commitScene, undoScene, redoScene, MAX_INSTANCES, MAX_DECODED_STICKER_PIXELS, type Scene, type SceneHistory } from '../shared/scene'
 import { createPhotoSession, editPhotoSession, savePhotoSession, discardPhotoSession, sessionAssets, type PhotoSession } from '../shared/photo-session'
 import { DEFAULT_OUTPUT, validOutput, outputSize, outputKey, type OutputSettings } from '../shared/output'
 import { composePng } from './export'
+import { ADJUSTMENT_KEYS, isNeutral, sameAdjustments, NEUTRAL_ADJUSTMENTS, type Adjustments } from '../shared/filters'
 import './style.css'
 
 declare global { interface Window { photokkumi: PhotoApi } }
@@ -48,6 +49,7 @@ function App() {
   const [drawMode, setDrawMode] = useState(false)
   const [regionDefaults, setRegionDefaults] = useState<Pick<BlurRegion, 'style' | 'strength'>>({ style: 'blur', strength: 50 })
   const liveBase = useRef<Scene | null>(null)
+  const [sideTab, setSideTab] = useState<'stickers' | 'adjust'>('stickers')
   const activeSession = photo ? sessions.current.get(photo.id) : undefined
   const referencedAssetsForCurrent = activeSession ? sessionAssets(activeSession) : []
   const referencedIds = [...new Set([...sessions.current.values()].flatMap(sessionAssets))]
@@ -121,8 +123,28 @@ function App() {
     const next = updateSelectedRegion(current, effect)
     if (live) liveEdit(next); else editScene(next)
   }
+  function changeAdjust(key: keyof Adjustments, value: number, live = false) {
+    if (!photo || !Number.isInteger(value) || Math.abs(value) > 100) return
+    const current = currentHistory.current.present
+    if (current.adjust[key] === value) return
+    const next = setAdjustments(current, { ...current.adjust, [key]: value })
+    if (live) liveEdit(next); else editScene(next)
+  }
+  function resetAdjust() { if (photo && !isNeutral(currentHistory.current.present.adjust)) editScene(setAdjustments(currentHistory.current.present, NEUTRAL_ADJUSTMENTS)) }
+  function applyAdjustToAll() {
+    commitLive()
+    const adjust = currentHistory.current.present.adjust
+    let count = 0
+    for (const item of photos) {
+      const session = sessions.current.get(item.id)
+      if (!session || item.id === activeId.current || sameAdjustments(session.history.present.adjust, adjust)) continue
+      sessions.current.set(item.id, editPhotoSession(session, commitScene(session.history, setAdjustments(session.history.present, adjust))))
+      count++
+    }
+    setStatus(count ? `보정 값을 다른 사진 ${count}장에 적용했습니다. 사진마다 실행 취소할 수 있습니다.` : '다른 사진에 이미 같은 보정이 적용되어 있습니다.')
+  }
   function drawRegion(value: Placement) {
-    setDrawMode(false)
+    setDrawMode(false); setSideTab('stickers')
     if (!photo) return
     try {
       editScene(addRegion(currentHistory.current.present, { id: crypto.randomUUID(), ...value, ...regionDefaults }))
@@ -344,7 +366,7 @@ function App() {
     setStatus('저장 중…')
     const persisted = await window.photokkumi.updateOutputSettings(output)
     if (!persisted.ok) throw new Error(persisted.error)
-    const png = await composePng(photo.bitmap, currentHistory.current.present.stickers, assets.current, output, currentHistory.current.present.regions)
+    const png = await composePng(photo.bitmap, currentHistory.current.present.stickers, assets.current, output, currentHistory.current.present.regions, currentHistory.current.present.adjust)
     const result = await window.photokkumi.saveImage({ photoId: photo.id, png, output })
     if (!result.ok) throw new Error(result.error)
     if (!result.value) { setStatus('저장이 취소되었습니다. 편집 내용은 유지됩니다.'); return false }
@@ -447,7 +469,7 @@ function App() {
         <button className="icon" aria-label="다시 실행" title="다시 실행 (Ctrl+Shift+Z)" disabled={busy || !history.future.length} onClick={() => applyHistory(redoScene(currentHistory.current))}><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="m10.5 3.5 3 3-3 3"/><path d="M13.5 6.5h-7a4 4 0 0 0 0 8H9"/></svg></button>
       </div>
       <div className="toolbar-group">
-        <button aria-pressed={drawMode} disabled={busy || !photo} title="사진 위를 드래그해 가릴 영역을 그립니다. Shift: 정원, 클릭: 기본 원, Esc: 취소" onClick={() => setDrawMode(mode => !mode)}>
+        <button aria-pressed={drawMode} disabled={busy || !photo} title="사진 위를 드래그해 가릴 영역을 그립니다. Shift: 정원, 클릭: 기본 원, Esc: 취소" onClick={() => { setDrawMode(mode => !mode); setSideTab('stickers') }}>
           <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="2.4 1.8"><ellipse cx="8" cy="8" rx="6.5" ry="5.5" /></svg> 블러·모자이크
         </button>
       </div>
@@ -490,6 +512,28 @@ function App() {
           : <div className="empty"><div className="drop-target"><strong>사진을 이 창으로 끌어다 놓으세요</strong><span>탐색기에서 JPG·PNG 사진 여러 장이나 폴더를 한 번에 끌어 놓으면 바로 불러옵니다.</span><span>또는 위의 <b>사진 열기</b> · <b>폴더 열기</b></span></div></div>}
       </div>
       <aside>
+        <div className="side-tabs" role="tablist" aria-label="편집 패널">
+          <button role="tab" aria-selected={sideTab === 'stickers'} onClick={() => setSideTab('stickers')}>스티커</button>
+          <button role="tab" aria-selected={sideTab === 'adjust'} onClick={() => { setDrawMode(false); setSideTab('adjust') }}>보정{!isNeutral(scene.adjust) && <span className="tab-dot" aria-label="(적용됨)" />}</button>
+        </div>
+        {sideTab === 'adjust' ? <section className="adjust-panel" aria-label="사진 보정">
+          {ADJUSTMENT_KEYS.map(key => {
+            const label = { exposure: '노출', contrast: '대비', saturation: '채도', temperature: '색온도' }[key]
+            return <div key={key} className={`adjust-row ${key}`}>
+              <div className="adjust-head"><span>{label}</span>
+                <input type="number" aria-label={label} min="-100" max="100" step="1" disabled={busy || !photo} value={scene.adjust[key]}
+                  onChange={e => changeAdjust(key, e.target.valueAsNumber)} /></div>
+              <input type="range" aria-label={`${label} 슬라이더`} min="-100" max="100" step="1" disabled={busy || !photo} value={scene.adjust[key]}
+                title="두 번 클릭하면 0으로" onDoubleClick={() => changeAdjust(key, 0)}
+                onChange={e => changeAdjust(key, e.target.valueAsNumber, true)} onPointerUp={commitLive} onKeyUp={commitLive} onBlur={commitLive} />
+            </div>
+          })}
+          <div className="adjust-actions">
+            <button disabled={busy || !photo || isNeutral(scene.adjust)} onClick={resetAdjust}>초기화</button>
+            <button disabled={busy || !photo || photos.length < 2} onClick={applyAdjustToAll}>모든 사진에 적용</button>
+          </div>
+          <p className="hint">{photo ? '보정은 사진에만 적용되고 스티커에는 적용되지 않습니다. 슬라이더를 두 번 클릭하면 0으로 돌아갑니다.' : '사진을 열면 노출·대비·채도·색온도를 조절할 수 있습니다.'}</p>
+        </section> : <>
         <div className="library-pane" hidden={libraryOpen}><LibraryPanel {...libraryProps} mode="pick" onManage={() => setLibraryOpen(true)} /></div>
         <section className="placed" aria-label="배치한 스티커">
           <div className="pane-heading">
@@ -534,6 +578,7 @@ function App() {
             <label>회전<input aria-label="회전" type="number" value={Math.round(selection.rotation * 100) / 100} onChange={e => change({ ...selection, rotation: e.target.valueAsNumber })} /></label>
           </fieldset> : drawMode ? null : <p className="hint">{photo ? '스티커를 클릭해 선택하면 위치·크기·회전을 조정할 수 있습니다. 방향키 1px, Shift+방향키 10px 이동.' : '사진을 열고 위 라이브러리에서 스티커를 누르면 배치됩니다.'}</p>}
         </section>
+        </>}
       </aside>
     </section>
     {!!photos.length && <section className="photo-list" aria-label="사진 목록">

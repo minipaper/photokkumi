@@ -1083,3 +1083,54 @@ test('블러·모자이크 영역을 드래그로 그리고 이동·강도 조�
   await expect(page.getByTestId('region-count')).toHaveText('1')
   expect(errors).toEqual([])
 })
+
+test('보정은 사진에만 적용되고 슬라이더 1회 undo·초기화·모든 사진에 적용·저장 결과가 일치한다', async () => {
+  await writeFile(source, makePng(1200, 800, () => [100, 100, 100, 255]))
+  const second = join(directory, '둘째.png')
+  await writeFile(second, makePng(400, 300, () => [100, 100, 100, 255]))
+  await select([source, second]); await page.getByRole('button', { name: '사진 열기', exact: true }).click()
+  await register(stickerPath)
+  await page.getByRole('button', { name: '투명 스티커 배치', exact: true }).click()
+  await field('중심 X', 600); await field('중심 Y', 400); await field('스티커 너비', 80)
+  await page.getByRole('tab', { name: /보정/ }).click()
+  await expect(page.getByRole('button', { name: '초기화', exact: true })).toBeDisabled()
+  const slider = page.getByRole('slider', { name: '노출 슬라이더' }), box = (await slider.boundingBox())!
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down()
+  await page.mouse.move(box.x + box.width * 0.65, box.y + box.height / 2, { steps: 6 })
+  await page.mouse.move(box.x + box.width * 0.75, box.y + box.height / 2, { steps: 6 }); await page.mouse.up()
+  const dragged = await value('노출')
+  expect(dragged).toBeGreaterThan(30)
+  await page.getByRole('button', { name: '실행 취소', exact: true }).click()
+  expect(await value('노출')).toBe(0)
+  await page.getByRole('button', { name: '다시 실행', exact: true }).click()
+  expect(await value('노출')).toBe(dragged)
+  await field('노출', 50); await field('색온도', -40)
+  await expect(page.getByRole('tab', { name: /보정/ })).toContainText('보정')
+  // Preview uses the same adjustment as export.
+  await expect.poll(() => page.evaluate(() => {
+    const canvas = document.querySelector('[data-testid=photo-content]') as HTMLCanvasElement
+    return [...canvas.getContext('2d')!.getImageData(10, 10, 1, 1).data]
+  })).not.toEqual([100, 100, 100, 255])
+
+  await page.getByRole('button', { name: '모든 사진에 적용', exact: true }).click()
+  await expect(page.getByRole('status')).toContainText('1장에 적용')
+  await expect(page.getByRole('button', { name: '사진 2: 둘째.png', exact: true })).toContainText('수정됨')
+
+  await save()
+  const result = await output()
+  const photoPixel = pixel(result, 100, 100)
+  expect(photoPixel[0]).toBeGreaterThan(115); expect(photoPixel[2]).toBeGreaterThan(photoPixel[0] + 15)
+  // Sticker colours (red/green halves) are not adjusted.
+  expect(pixel(result, 580, 395)).toEqual([255, 0, 0, 255])
+  expect(pixel(result, 620, 395)).toEqual([0, 255, 0, 255])
+
+  await page.getByRole('button', { name: '저장하고 다음' }).click()
+  await expect(page.getByRole('button', { name: '사진 2: 둘째.png', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('tab', { name: /보정/ })).toHaveAttribute('aria-selected', 'true')
+  expect(await value('노출')).toBe(50); expect(await value('색온도')).toBe(-40)
+  await page.getByRole('button', { name: '초기화', exact: true }).click()
+  expect(await value('노출')).toBe(0)
+  await page.getByRole('button', { name: '실행 취소', exact: true }).click()
+  expect(await value('노출')).toBe(50)
+  expect(errors).toEqual([])
+})

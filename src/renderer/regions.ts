@@ -1,8 +1,9 @@
 import type { BlurRegion } from '../shared/model'
 import { regionBounds, regionPatch, sourceRect, type Rect } from '../shared/effects'
+import type { PhotoSource } from './filters'
 export interface RegionPatch { canvas: HTMLCanvasElement; bounds: Rect }
 /** Builds the blur/mosaic pixels for one region from the original photo (logical photo pixels). */
-export function buildRegionPatch(photo: ImageBitmap, region: BlurRegion): RegionPatch | null {
+export function buildRegionPatch(photo: PhotoSource, region: BlurRegion): RegionPatch | null {
   const bounds = regionBounds(region, photo.width, photo.height)
   if (!bounds) return null
   const source = sourceRect(region, bounds, photo.width, photo.height)

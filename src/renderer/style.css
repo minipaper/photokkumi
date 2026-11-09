@@ -90,6 +90,19 @@ aside {
   flex: none; width: 288px; display: flex; flex-direction: column; min-height: 0; overflow: hidden;
   background: var(--surface); border-left: 1px solid var(--line);
 }
+.side-tabs { flex: none; display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid var(--line); }
+.side-tabs button { height: 38px; border: 0; border-radius: 0; background: none; color: var(--muted); font-weight: 600; border-bottom: 2px solid transparent; }
+.side-tabs button[aria-selected=true] { color: var(--accent); border-bottom-color: var(--accent); }
+.side-tabs button:hover:not(:disabled) { background: var(--surface-2); }
+.tab-dot { display: inline-block; width: 6px; height: 6px; margin-left: 5px; border-radius: 50%; background: var(--accent); vertical-align: 2px; }
+.adjust-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 14px; padding: 14px 12px; }
+.adjust-row { display: grid; gap: 6px; }
+.adjust-head { display: flex; align-items: center; justify-content: space-between; font-weight: 600; font-size: 12px; }
+.adjust-head input { width: 60px; text-align: right; }
+.adjust-row input[type=range] { width: 100%; height: auto; padding: 0; border: 0; background: none; accent-color: var(--accent); }
+.adjust-row.temperature input[type=range] { accent-color: #e8833a; }
+.adjust-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.adjust-actions button { height: 30px; padding: 0 6px; font-size: 12px; }
 .pane-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .pane-heading h2 { font-size: 13px; font-weight: 700; }
 .pane-heading small { color: var(--muted); font-weight: 400; }

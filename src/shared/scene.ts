@@ -1,11 +1,16 @@
 import type { BlurRegion, Placement, StickerInstance } from './model'
 import { validPlacement } from './model'
+import { NEUTRAL_ADJUSTMENTS, validAdjustments, type Adjustments } from './filters'
 export const MAX_INSTANCES = 200
 export const MAX_DECODED_STICKER_PIXELS = 32_000_000
 export const MAX_REGIONS = 50
-export interface Scene { stickers: StickerInstance[]; regions: BlurRegion[]; selectedId: string | null }
+export interface Scene { stickers: StickerInstance[]; regions: BlurRegion[]; adjust: Adjustments; selectedId: string | null }
 export interface SceneHistory { present: Scene; past: Scene[]; future: Scene[] }
-export const emptyHistory = (): SceneHistory => ({ present: { stickers: [], regions: [], selectedId: null }, past: [], future: [] })
+export const emptyHistory = (): SceneHistory => ({ present: { stickers: [], regions: [], adjust: { ...NEUTRAL_ADJUSTMENTS }, selectedId: null }, past: [], future: [] })
+export function setAdjustments(scene: Scene, adjust: Adjustments): Scene {
+  if (!validAdjustments(adjust)) throw new Error('보정 값은 -100~100 정수입니다.')
+  return { ...scene, adjust: { ...adjust } }
+}
 export const validStrength = (value: number) => Number.isInteger(value) && value >= 1 && value <= 100
 export function addRegion(scene: Scene, region: BlurRegion): Scene {
   if (scene.regions.length >= MAX_REGIONS) throw new Error('사진 한 장에는 블러·모자이크 영역을 최대 50개 만들 수 있습니다.')

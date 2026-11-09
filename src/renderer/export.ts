@@ -1,8 +1,13 @@
 import { DEFAULT_OUTPUT, outputSize, type OutputSettings } from '../shared/output'
 import type { BlurRegion, StickerInstance } from '../shared/model'
 import { buildRegionPatch, ellipsePath } from './regions'
-export async function composePng(photo: ImageBitmap, instances: StickerInstance[], assets: ReadonlyMap<string, { bitmap: ImageBitmap }>, output: OutputSettings = DEFAULT_OUTPUT, regions: BlurRegion[] = []): Promise<Uint8Array> {
+import { renderAdjusted, releaseCanvas } from './filters'
+import { NEUTRAL_ADJUSTMENTS, type Adjustments } from '../shared/filters'
+export async function composePng(photo: ImageBitmap, instances: StickerInstance[], assets: ReadonlyMap<string, { bitmap: ImageBitmap }>, output: OutputSettings = DEFAULT_OUTPUT, regions: BlurRegion[] = [], adjust: Adjustments = NEUTRAL_ADJUSTMENTS): Promise<Uint8Array> {
   const canvas = document.createElement('canvas')
+  // Order: adjustments → blur/mosaic (hides adjusted pixels) → stickers (never adjusted).
+  const adjusted = renderAdjusted(photo, adjust)
+  const base = adjusted ?? photo
   const size = outputSize(photo.width, photo.height, output)
   canvas.width = size.width
   canvas.height = size.height
@@ -13,10 +18,10 @@ export async function composePng(photo: ImageBitmap, instances: StickerInstance[
     context.imageSmoothingQuality = 'high'
     if (output.format === 'jpg') { context.fillStyle = '#ffffff'; context.fillRect(0, 0, canvas.width, canvas.height) }
     context.scale(size.width / photo.width, size.height / photo.height)
-    context.drawImage(photo, 0, 0)
+    context.drawImage(base, 0, 0)
     // Regions hide photo pixels only; stickers are always drawn above them.
     for (const region of regions) {
-      const patch = buildRegionPatch(photo, region)
+      const patch = buildRegionPatch(base, region)
       if (!patch) continue
       context.save()
       ellipsePath(context, region); context.clip()
@@ -37,5 +42,5 @@ export async function composePng(photo: ImageBitmap, instances: StickerInstance[
       value => value ? resolve(value) : reject(new Error('PNG 인코딩에 실패했습니다.')), 'image/png'
     ))
     return new Uint8Array(await blob.arrayBuffer())
-  } finally { canvas.width = 0; canvas.height = 0 }
+  } finally { canvas.width = 0; canvas.height = 0; releaseCanvas(adjusted) }
 }

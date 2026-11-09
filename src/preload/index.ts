@@ -31,6 +31,18 @@ const api: PhotoApi = {
     return paths.length ? ipcRenderer.invoke('photo:drop', paths) : Promise.resolve({ ok: false, error: '끌어 놓은 항목에서 파일을 찾지 못했습니다.' })
   },
   removePhoto: id => ipcRenderer.invoke('photo:remove', id),
+  gifToolStatus: () => ipcRenderer.invoke('gif:tool-status'),
+  locateGifTool: () => ipcRenderer.invoke('gif:tool-locate'),
+  chooseGifTool: () => ipcRenderer.invoke('gif:tool-choose'),
+  openVideo: () => ipcRenderer.invoke('gif:open-video'),
+  loadVideo: id => ipcRenderer.invoke('gif:load-video', id),
+  createGif: (id, options) => ipcRenderer.invoke('gif:create', id, options),
+  cancelGif: () => ipcRenderer.invoke('gif:cancel'),
+  onGifProgress: callback => {
+    const listener = (_event: unknown, ratio: unknown) => { if (typeof ratio === 'number' && ratio >= 0 && ratio <= 1) callback(ratio) }
+    ipcRenderer.on('gif:progress', listener)
+    return () => { ipcRenderer.removeListener('gif:progress', listener) }
+  },
   chooseOutputFolder: () => ipcRenderer.invoke('output:folder'),
   getOutputSettings: () => ipcRenderer.invoke('output:get'),
   updateOutputSettings: output => ipcRenderer.invoke('output:update', output),

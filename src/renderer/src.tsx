@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type DragEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type DragEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { BlurRegion, ImageAsset, PhotoApi, PhotoInfo, Placement, RegionStyle } from '../shared/model'
 import { validPlacement } from '../shared/model'
 import type { LibrarySticker, StickerMetadata } from '../shared/library'
 import { LibraryPanel } from './LibraryPanel'
 import { EditorCanvas } from './EditorCanvas'
+import { GifMaker } from './GifMaker'
+import type { VideoRef } from '../shared/gif'
 import { addInstance, addRegion, setAdjustments, updateSelectedRegion, validStrength, updateSelected, removeSelected, duplicateSelected, reorderSelected, emptyHistory, commitScene, undoScene, redoScene, MAX_INSTANCES, MAX_DECODED_STICKER_PIXELS, type Scene, type SceneHistory } from '../shared/scene'
 import { createPhotoSession, editPhotoSession, savePhotoSession, discardPhotoSession, sessionAssets, type PhotoSession } from '../shared/photo-session'
 import { DEFAULT_OUTPUT, validOutput, outputSize, outputKey, type OutputSettings } from '../shared/output'
@@ -50,6 +52,11 @@ function App() {
   const [regionDefaults, setRegionDefaults] = useState<Pick<BlurRegion, 'style' | 'strength'>>({ style: 'blur', strength: 50 })
   const liveBase = useRef<Scene | null>(null)
   const [sideTab, setSideTab] = useState<'stickers' | 'adjust'>('stickers')
+  const [mode, setMode] = useState<'photo' | 'gif'>('photo')
+  const [incomingVideo, setIncomingVideo] = useState<{ ref: VideoRef; nonce: number } | null>(null)
+  const [gifBusy, setGifBusy] = useState(false)
+  const showError = useCallback((text: string) => setError(text), [])
+  const showStatus = useCallback((text: string) => setStatus(text), [])
   const activeSession = photo ? sessions.current.get(photo.id) : undefined
   const referencedAssetsForCurrent = activeSession ? sessionAssets(activeSession) : []
   const referencedIds = [...new Set([...sessions.current.values()].flatMap(sessionAssets))]
@@ -244,6 +251,7 @@ function App() {
   }
   function handleEditorKey(event: KeyboardEvent<HTMLElement>) {
     const target = event.target
+    if (mode !== 'photo') return
     if (event.defaultPrevented || event.nativeEvent.isComposing || event.altKey
       || operation.current || closeRequest || pendingPhoto || libraryOpen || (target instanceof HTMLElement
         && (target.isContentEditable || target.closest('input, textarea, select, dialog, [role="textbox"]')))) return
@@ -320,7 +328,12 @@ function App() {
   const importDropped = (files: File[]) => run(async () => {
     const result = await window.photokkumi.importDroppedFiles(files)
     if (!result.ok) throw new Error(result.error)
-    await acceptBatch(result.value.photos, result.value.rejected)
+    const { photos: imported, rejected, videos } = result.value
+    const before = photos.length
+    await acceptBatch(imported, rejected)
+    // A dropped video opens the GIF maker; photos-only drops bring the editor forward.
+    if (videos[0]) { setMode('gif'); setIncomingVideo({ ref: videos[0], nonce: Date.now() }) }
+    else if (imported.length !== before || !rejected.length) setMode('photo')
   })
   const removePhoto = (id: string) => run(async () => {
     const index = photos.findIndex(item => item.id === id)
@@ -419,7 +432,7 @@ function App() {
   const photoState = (session: PhotoSession) => session.dirty ? (session.saved ? '저장 후 수정' : '수정됨') : session.saved ? (session.outputKey !== outputKey(output) ? '출력 설정 변경' : session.savedFolder !== outputFolder ? '출력 폴더 변경' : '저장 완료') : '미작업'
   const canSave = !busy && !!photo && outputLoaded && !outputError
   const hasFiles = (event: DragEvent) => Array.from(event.dataTransfer.types).includes('Files')
-  const dropBlocked = busy || !!pendingPhoto || !!closeRequest || libraryOpen
+  const dropBlocked = busy || gifBusy || !!pendingPhoto || !!closeRequest || libraryOpen
   return <main onKeyDown={handleEditorKey}
     onDragEnter={event => { if (!hasFiles(event)) return; event.preventDefault(); dragDepth.current++; setDragging(true) }}
     onDragOver={event => { if (!hasFiles(event)) return; event.preventDefault(); event.dataTransfer.dropEffect = dropBlocked ? 'none' : 'copy' }}
@@ -460,6 +473,11 @@ function App() {
     </dialog>
     <header className="toolbar">
       <h1>포토꾸미</h1>
+      <div className="mode-tabs" role="tablist" aria-label="작업 모드">
+        <button role="tab" aria-selected={mode === 'photo'} disabled={gifBusy} onClick={() => setMode('photo')}>사진 편집</button>
+        <button role="tab" aria-selected={mode === 'gif'} disabled={busy} onClick={() => { setDrawMode(false); setSettingsOpen(false); setMode('gif') }}>GIF 만들기</button>
+      </div>
+      <div className="photo-tools" hidden={mode !== 'photo'}>
       <nav aria-label="파일 작업" className="toolbar-group">
         <button onClick={choosePhoto} disabled={busy || !!pendingPhoto}>사진 열기</button>
         <button onClick={choosePhotoFolder} disabled={busy || !!pendingPhoto}>폴더 열기</button>
@@ -469,8 +487,8 @@ function App() {
         <button className="icon" aria-label="다시 실행" title="다시 실행 (Ctrl+Shift+Z)" disabled={busy || !history.future.length} onClick={() => applyHistory(redoScene(currentHistory.current))}><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="m10.5 3.5 3 3-3 3"/><path d="M13.5 6.5h-7a4 4 0 0 0 0 8H9"/></svg></button>
       </div>
       <div className="toolbar-group">
-        <button aria-pressed={drawMode} disabled={busy || !photo} title="사진 위를 드래그해 가릴 영역을 그립니다. Shift: 정원, 클릭: 기본 원, Esc: 취소" onClick={() => { setDrawMode(mode => !mode); setSideTab('stickers') }}>
-          <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="2.4 1.8"><ellipse cx="8" cy="8" rx="6.5" ry="5.5" /></svg> 블러·모자이크
+        <button className="draw-toggle" aria-label="블러·모자이크" aria-pressed={drawMode} disabled={busy || !photo} title="블러·모자이크 영역 그리기 — 드래그, Shift: 정원, 클릭: 기본 원, Esc: 취소" onClick={() => { setDrawMode(mode => !mode); setSideTab('stickers') }}>
+          <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="2.4 1.8"><ellipse cx="8" cy="8" rx="6.5" ry="5.5" /></svg><span className="label"> 블러·모자이크</span>
         </button>
       </div>
       <div className="toolbar-spacer" />
@@ -503,8 +521,13 @@ function App() {
       </div>
       <button onClick={save} disabled={!canSave}>{busy ? '처리 중…' : output.format === 'jpg' ? 'JPG로 저장' : 'PNG로 저장'}</button>
       <button className="primary" onClick={saveNext} disabled={!canSave}>저장하고 다음</button>
+      </div>
     </header>
-    <section className="workspace">
+    <div className="gif-host" hidden={mode !== 'gif'}>
+      <GifMaker incoming={incomingVideo} outputFolder={outputFolder} active={mode === 'gif'} onBusyChange={setGifBusy}
+        onSaved={receipt => setOutputFolder(receipt.folderLabel)} onStatus={showStatus} onError={showError} />
+    </div>
+    <section className="workspace" hidden={mode !== 'photo'}>
       <div className="canvas-column">
         {photo ? <EditorCanvas key={photo.id} photo={photo} assets={assets.current} scene={scene} disabled={busy} onSelect={selectInstance} onChange={(id, value) => change(value, id)}
           drawMode={drawMode} onDraw={drawRegion}
@@ -581,7 +604,7 @@ function App() {
         </>}
       </aside>
     </section>
-    {!!photos.length && <section className="photo-list" aria-label="사진 목록">
+    {!!photos.length && mode === 'photo' && <section className="photo-list" aria-label="사진 목록">
       <div className="photo-nav">
         <button className="icon nav" aria-label="이전 사진" disabled={busy || photoIndex <= 0} onClick={() => requestPhoto(photos[photoIndex - 1].id)}>‹</button>
         <h2>{photoIndex + 1} / {photos.length}</h2>

@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, protocol, session } from 'electron'
 import { mkdirSync } from 'node:fs'
-import { readFile, realpath, stat } from 'node:fs/promises'
-import { basename, extname, join, resolve, sep } from 'node:path'
+import { readFile, realpath, stat, lstat, unlink } from 'node:fs/promises'
+import { basename, delimiter, extname, join, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { ImageAsset, Result, SaveRequest, SaveReceipt } from '../shared/model'
 import { imageSize } from 'image-size'
@@ -13,6 +13,9 @@ import { StickerLibrary, readBounded } from './library'
 import { OutputStore } from './settings'
 import { outputSize, validOutput } from '../shared/output'
 import { PhotoStore, validDroppedPaths } from './photos'
+import { ToolStore, VideoStore, runTool } from './ffmpeg'
+import { VIDEO_EXTENSIONS, validGifOptions, gifArgs, previewArgs, previewFps, parseProbe, splitJpegs, parseProgress, type GifOptions, type GifReceipt, type VideoInfo, type VideoRef } from '../shared/gif'
+import type { ChildProcess } from 'node:child_process'
 import { MAX_BACKUP_BYTES, validAssetId, validMetadata } from '../shared/library'
 
 const profile = app.commandLine.getSwitchValue('user-data-dir')
@@ -38,6 +41,11 @@ const photos = new PhotoStore(bytes => {
   return nativeImage.createFromBitmap(Buffer.from(oriented.bytes), { width: oriented.width, height: oriented.height }).toDataURL()
 })
 const outputStore = new OutputStore(app.getPath('userData'))
+// Tests may replace the search list (unpackaged builds only) to exercise the "not installed" flow.
+const candidateOverride = !app.isPackaged ? process.env.PHOTOKKUMI_FFMPEG_CANDIDATES : undefined
+const tools = new ToolStore(app.getPath('userData'), candidateOverride === undefined ? undefined : async () => candidateOverride.split(delimiter).filter(Boolean))
+const videos = new VideoStore()
+let gifJob: { child?: ChildProcess; temporary?: string } | null = null
 const photoReferences = new Map<string, string[]>()
 let outputDirectory: string | null = null
 let busy = false
@@ -66,6 +74,76 @@ async function chooseOutputFolder(): Promise<string | null> {
   outputDirectory = path
   return path
 }
+
+async function dropFiles(paths: string[]) {
+  const videoPaths: string[] = [], photoPaths: string[] = [], rejected: string[] = []
+  for (const path of paths) (VIDEO_EXTENSIONS.includes(extname(path).toLowerCase()) ? videoPaths : photoPaths).push(path)
+  const refs: VideoRef[] = []
+  for (const path of videoPaths) {
+    // One video is edited at a time; additional ones are reported instead of silently queued.
+    if (refs.length) { rejected.push(basename(path)); continue }
+    try { if ((await lstat(path)).isSymbolicLink()) throw new Error('symlink'); refs.push(await videos.add(path)) } catch { rejected.push(basename(path)) }
+  }
+  const batch = photoPaths.length ? await photos.addDropped(photoPaths) : { photos: photos.list(), rejected: [] }
+  return { photos: batch.photos, rejected: [...batch.rejected, ...rejected], videos: refs }
+}
+async function openVideo(): Promise<VideoRef | null> {
+  const selected = await dialog.showOpenDialog(win!, { title: '동영상 열기', properties: ['openFile'], filters: [{ name: 'MOV / MP4', extensions: VIDEO_EXTENSIONS.map(item => item.slice(1)) }] })
+  return selected.canceled || !selected.filePaths[0] ? null : videos.add(selected.filePaths[0])
+}
+async function chooseTool() {
+  const selected = await dialog.showOpenDialog(win!, { title: 'ffmpeg 실행 파일 선택', properties: ['openFile'], filters: process.platform === 'win32' ? [{ name: 'ffmpeg.exe', extensions: ['exe'] }] : [] })
+  return selected.canceled || !selected.filePaths[0] ? null : tools.choose(selected.filePaths[0])
+}
+async function loadVideo(id: string): Promise<VideoInfo> {
+  const ffmpeg = tools.require(), record = videos.get(id)
+  const probe = await runTool(ffmpeg, ['-hide_banner', '-nostdin', '-i', record.path], { timeoutMs: 30_000, maxStdout: 1 << 20 })
+  const info = parseProbe(probe.stderr)
+  const fps = previewFps(info.duration)
+  const preview = await runTool(ffmpeg, previewArgs(record.path, fps), { timeoutMs: 180_000, maxStdout: 96 * 1024 * 1024, signal: gifJob = {} })
+  gifJob = null
+  const frames = splitJpegs(preview.stdout)
+  if (preview.code !== 0 || !frames.length) throw new Error('동영상을 읽지 못했습니다. 손상되었거나 ffmpeg가 지원하지 않는 형식입니다.')
+  record.width = info.width; record.duration = info.duration
+  return { ...record.ref, ...info, previewFps: fps, frames }
+}
+async function createGif(id: string, options: GifOptions): Promise<GifReceipt | null> {
+  const ffmpeg = tools.require(), record = videos.get(id)
+  if (!record.duration || !record.width || !validGifOptions(options, record.duration)) throw new Error('GIF 구간·크기 설정을 확인하세요.')
+  let directory = outputDirectory
+  if (!directory) {
+    const selected = await dialog.showOpenDialog(win!, { title: 'GIF를 저장할 폴더', properties: ['openDirectory', 'createDirectory'] })
+    if (selected.canceled || !selected.filePaths[0]) return null
+    directory = selected.filePaths[0]
+  }
+  const temporary = join(app.getPath('temp'), `photokkumi-${randomUUID()}.gif`)
+  const job: { child?: ChildProcess; temporary?: string } = { temporary }
+  gifJob = job
+  try {
+    const length = options.end - options.start
+    const result = await runTool(ffmpeg, gifArgs(record.path, temporary, options, record.width), {
+      timeoutMs: 600_000, maxStdout: 16 << 20, signal: job,
+      onStdout: chunk => { const time = parseProgress(chunk.toString('utf8')); if (time !== null) win?.webContents.send('gif:progress', Math.min(1, time / length)) }
+    })
+    if (result.code !== 0) throw new Error('GIF를 만들지 못했습니다. ' + result.stderr.split(/\r?\n/).filter(Boolean).at(-1)?.slice(0, 160))
+    const bytes = await readBounded(temporary, MAX_GIF_BYTES)
+    if (bytes.subarray(0, 6).toString('latin1') !== 'GIF89a') throw new Error('GIF 파일을 확인할 수 없습니다.')
+    try {
+      const target = await realpath(directory)
+      const name = basename(await saveUnique(target, record.path, bytes, '.gif'))
+      outputDirectory = target
+      return { name, folderLabel: target, bytes: bytes.length }
+    } catch (error) {
+      if (error instanceof SaveCleanupError) throw error
+      throw new Error('GIF를 저장하지 못했습니다. 폴더 권한·여유 공간을 확인하세요.', { cause: error })
+    }
+  } finally {
+    if (gifJob === job) gifJob = null
+    await unlink(temporary).catch(() => undefined)
+  }
+}
+function cancelGif() { gifJob?.child?.kill('SIGKILL'); return null }
+const MAX_GIF_BYTES = 200 * 1024 * 1024
 
 async function removePhoto(id: string) {
   const remaining = photos.remove(id)
@@ -128,7 +206,7 @@ function createWindow() {
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.webContents.on('will-navigate', event => event.preventDefault())
   win.webContents.on('will-attach-webview', event => event.preventDefault())
-  win.on('closed', () => { win = null; outputDirectory = null; photos.clear(); photoReferences.clear(); pendingClose = null; activeStickerIds.clear(); permittedStickerIds.clear() })
+  win.on('closed', () => { cancelGif(); videos.clear(); win = null; outputDirectory = null; photos.clear(); photoReferences.clear(); pendingClose = null; activeStickerIds.clear(); permittedStickerIds.clear() })
   void win.loadURL(pageUrl)
 }
 
@@ -176,7 +254,7 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionCheckHandler(() => false)
   for (const [channel, action] of [
     ['photo:choose', choosePhotos], ['photo:folder', choosePhotoFolder], ['output:folder', chooseOutputFolder], ['photo:save', save], ['photo:read', (id: string) => photos.read(id)],
-    ['photo:drop', (paths: string[]) => photos.addDropped(paths)], ['photo:remove', removePhoto]
+    ['photo:drop', dropFiles], ['photo:remove', removePhoto]
   ] as const) {
     ipcMain.handle(channel, async (event, ...args: unknown[]): Promise<Result<unknown>> => {
       if (!win || !trustedSender(event.sender.id, win.webContents.id, event.senderFrame === win.webContents.mainFrame, event.senderFrame?.url ?? '', pageUrl)) {
@@ -191,6 +269,28 @@ app.whenReady().then(() => {
       try { return { ok: true, value: await (action as (value: unknown) => Promise<unknown>)(args[0]) } }
       catch (error) { return { ok: false, error: error instanceof Error ? error.message : '작업에 실패했습니다.' } }
       finally { busy = false }
+    })
+  }
+  // GIF work has its own lock so photo editing IPC is not blocked by a long encode.
+  let gifBusy = false
+  const gifActions: Record<string, { count: number; valid?(args: unknown[]): boolean; run(...args: unknown[]): Promise<unknown> | unknown; lock?: boolean }> = {
+    'gif:tool-status': { count: 0, run: async () => tools.status().found ? tools.status() : tools.locate() },
+    'gif:tool-locate': { count: 0, lock: true, run: () => tools.locate() },
+    'gif:tool-choose': { count: 0, lock: true, run: chooseTool },
+    'gif:open-video': { count: 0, lock: true, run: openVideo },
+    'gif:load-video': { count: 1, lock: true, valid: args => validAssetId(args[0]), run: id => loadVideo(id as string) },
+    'gif:create': { count: 2, lock: true, valid: args => validAssetId(args[0]) && validGifOptions(args[1]), run: (id, options) => createGif(id as string, options as GifOptions) },
+    'gif:cancel': { count: 0, run: cancelGif }
+  }
+  for (const [channel, action] of Object.entries(gifActions)) {
+    ipcMain.handle(channel, async (event, ...args: unknown[]): Promise<Result<unknown>> => {
+      if (!win || !trustedSender(event.sender.id, win.webContents.id, event.senderFrame === win.webContents.mainFrame, event.senderFrame?.url ?? '', pageUrl)) return { ok: false, error: '허용되지 않은 요청입니다.' }
+      if (args.length !== action.count || (action.valid && !action.valid(args))) return { ok: false, error: '유효하지 않은 GIF 요청입니다.' }
+      if (action.lock && gifBusy) return { ok: false, error: 'GIF 작업이 끝난 뒤 다시 시도하세요.' }
+      if (action.lock) gifBusy = true
+      try { return { ok: true, value: await action.run(...args) } }
+      catch (error) { return { ok: false, error: error instanceof Error ? error.message : 'GIF 작업에 실패했습니다.' } }
+      finally { if (action.lock) gifBusy = false }
     })
   }
   for (const channel of ['output:get', 'output:update']) {

@@ -1,4 +1,5 @@
 import type { OutputSettings } from './output'
+import type { GifOptions, GifReceipt, ToolStatus, VideoInfo, VideoRef } from './gif'
 import type { LibrarySticker, StickerMetadata, LibraryImportResult } from './library'
 export type AssetKind = 'photo' | 'sticker'
 export interface ImageAsset {
@@ -23,6 +24,7 @@ export type RegionStyle = 'blur' | 'mosaic'
 export interface BlurRegion extends Placement { id: string; style: RegionStyle; strength: number }
 export type Result<T> = { ok: true; value: T } | { ok: false; error: string }
 export interface PhotoBatch { photos: PhotoInfo[]; rejected: string[] }
+export interface DropBatch extends PhotoBatch { videos: VideoRef[] }
 export interface SaveReceipt { name: string; folderLabel: string }
 export interface SaveRequest { photoId: string; png: Uint8Array; output: OutputSettings }
 export interface CloseResolution { requestId: string; action: 'close' | 'cancel' }
@@ -40,7 +42,15 @@ export interface PhotoApi {
   choosePhotos(): Promise<Result<PhotoInfo[] | null>>
   readPhoto(id: string): Promise<Result<ImageAsset>>
   choosePhotoFolder(): Promise<Result<PhotoBatch | null>>
-  importDroppedFiles(files: File[]): Promise<Result<PhotoBatch>>
+  importDroppedFiles(files: File[]): Promise<Result<DropBatch>>
+  gifToolStatus(): Promise<Result<ToolStatus>>
+  locateGifTool(): Promise<Result<ToolStatus>>
+  chooseGifTool(): Promise<Result<ToolStatus | null>>
+  openVideo(): Promise<Result<VideoRef | null>>
+  loadVideo(id: string): Promise<Result<VideoInfo>>
+  createGif(id: string, options: GifOptions): Promise<Result<GifReceipt | null>>
+  cancelGif(): Promise<Result<null>>
+  onGifProgress(callback: (ratio: number) => void): () => void
   removePhoto(id: string): Promise<Result<PhotoInfo[]>>
   chooseOutputFolder(): Promise<Result<string | null>>
   getOutputSettings(): Promise<Result<OutputSettings>>

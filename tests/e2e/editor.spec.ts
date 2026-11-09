@@ -176,13 +176,17 @@ test('안전한 창 설정·IPC 거부·잘못된 이미지 거부', async () =>
     return { sandbox: p.sandbox, contextIsolation: p.contextIsolation, nodeIntegration: p.nodeIntegration }
   })
   expect(prefs).toEqual({ sandbox: true, contextIsolation: true, nodeIntegration: false })
-  expect(await page.evaluate(() => Object.keys(window.photokkumi).sort())).toEqual(['backupLibrary', 'chooseOutputFolder', 'choosePhotoFolder', 'choosePhotos', 'deleteSticker', 'getOutputSettings', 'importDroppedFiles', 'importStickers', 'listStickers', 'onCloseRequested', 'readPhoto', 'removePhoto', 'resolveClose', 'restoreLibrary', 'saveImage', 'setStickerReferences', 'updateOutputSettings', 'updateSticker', 'useSticker'])
+  expect(await page.evaluate(() => Object.keys(window.photokkumi).sort())).toEqual(['backupLibrary', 'cancelGif', 'chooseGifTool', 'chooseOutputFolder', 'choosePhotoFolder', 'choosePhotos', 'createGif', 'deleteSticker', 'getOutputSettings', 'gifToolStatus', 'importDroppedFiles', 'importStickers', 'listStickers', 'loadVideo', 'locateGifTool', 'onCloseRequested', 'onGifProgress', 'openVideo', 'readPhoto', 'removePhoto', 'resolveClose', 'restoreLibrary', 'saveImage', 'setStickerReferences', 'updateOutputSettings', 'updateSticker', 'useSticker'])
   expect(await page.evaluate(() => typeof (window as unknown as { require?: unknown }).require)).toBe('undefined')
   const invalid = await page.evaluate(() => window.photokkumi.saveImage({ photoId: '../../anything', png: new Uint8Array(), output: { format: 'png', resizeEnabled: false, resizeBasis: 'width', landscapeSize: 1600, portraitSize: 900, preventUpscale: true, quality: 100 } }))
   expect(invalid.ok).toBe(false)
   expect((await page.evaluate(() => window.photokkumi.resolveClose({ requestId: 'forged', action: 'close' }))).ok).toBe(false)
   expect((await page.evaluate(() => window.photokkumi.importDroppedFiles([new File(['x'], '/etc/passwd')]))).ok).toBe(false)
   expect((await page.evaluate(() => window.photokkumi.removePhoto('../../anything'))).ok).toBe(false)
+  expect((await page.evaluate(() => window.photokkumi.loadVideo('../../etc/passwd'))).ok).toBe(false)
+  expect((await page.evaluate(() => window.photokkumi.loadVideo('00000000-0000-4000-8000-000000000000'))).ok).toBe(false)
+  expect((await page.evaluate(() => window.photokkumi.createGif('00000000-0000-4000-8000-000000000000', { start: 0, end: 1, width: 480, fps: 12 }))).ok).toBe(false)
+  expect((await page.evaluate(() => window.photokkumi.createGif('00000000-0000-4000-8000-000000000000', { start: 0, end: 1, width: 4800, fps: 12 }))).ok).toBe(false)
   expect((await page.evaluate(() => window.photokkumi.removePhoto('00000000-0000-4000-8000-000000000000'))).ok).toBe(false)
   const corrupt = join(directory, 'corrupt.png'); await writeFile(corrupt, '<svg/>')
   await select(corrupt); await page.getByRole('button', { name: '사진 열기', exact: true }).click()
@@ -1132,5 +1136,95 @@ test('보정은 사진에만 적용되고 슬라이더 1회 undo·초기화·모
   expect(await value('노출')).toBe(0)
   await page.getByRole('button', { name: '실행 취소', exact: true }).click()
   expect(await value('노출')).toBe(50)
+  expect(errors).toEqual([])
+})
+
+function findFfmpeg() {
+  const { spawnSync } = process.getBuiltinModule('node:child_process') as typeof import('node:child_process')
+  for (const candidate of [process.env.FFMPEG_PATH, 'ffmpeg', '/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg'].filter(Boolean) as string[]) {
+    const result = spawnSync(candidate, ['-hide_banner', '-version'], { encoding: 'utf8' })
+    if (result.status === 0 && result.stdout.startsWith('ffmpeg version')) return candidate
+  }
+  return null
+}
+async function relaunch(env: Record<string, string>) {
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().forEach(window => window.destroy()))
+  await app.close().catch(error => { if (!page.isClosed()) throw error })
+  app = await electron.launch({ args: [resolve('out/main/index.js'), `--user-data-dir=${join(directory, 'profile')}`], env: { ...process.env, ELECTRON_RENDERER_URL: '', ...env } })
+  page = await app.firstWindow()
+  page.on('pageerror', error => errors.push(error.message))
+  await expect(page.getByRole('heading', { name: '포토꾸미', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '사진 열기', exact: true })).toBeEnabled()
+  await app.context().setOffline(true)
+}
+
+test('GIF 만들기: ffmpeg 미설치 안내·위치 지정, 회전 HEVC MOV 드롭, [ ] 구간 선택, 원본 불변 GIF 저장', async () => {
+  const ffmpeg = findFfmpeg()
+  test.skip(!ffmpeg, 'ffmpeg가 설치되지 않은 환경')
+  const { spawnSync } = process.getBuiltinModule('node:child_process') as typeof import('node:child_process')
+  const raw = join(directory, 'raw.mov'), clip = join(directory, 'IMG_0001.MOV')
+  // 4s 320×240 HEVC, then remuxed with a 90° display matrix like an iPhone portrait clip.
+  expect(spawnSync(ffmpeg!, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=30', '-t', '4', '-c:v', 'libx265', '-tag:v', 'hvc1', '-pix_fmt', 'yuv420p', raw]).status).toBe(0)
+  expect(spawnSync(ffmpeg!, ['-hide_banner', '-loglevel', 'error', '-display_rotation', '90', '-i', raw, '-c', 'copy', clip]).status).toBe(0)
+  const originalHash = createHash('sha256').update(await readFile(clip)).digest('hex')
+
+  await relaunch({ PHOTOKKUMI_FFMPEG_CANDIDATES: '' })
+  await page.getByRole('tab', { name: 'GIF 만들기' }).click()
+  await expect(page.getByRole('heading', { name: 'GIF 만들기에는 ffmpeg가 필요합니다' })).toBeVisible()
+  await expect(page.getByRole('textbox', { name: '설치 명령' })).toHaveValue(/ffmpeg/i)
+  await page.getByRole('button', { name: '다시 찾기' }).click()
+  await expect(page.getByRole('status')).toContainText('찾지 못했습니다')
+  await select(source); await page.getByRole('button', { name: 'ffmpeg 위치 선택' }).click()
+  await expect(page.getByRole('alert')).toContainText('ffmpeg가 아닙니다')
+  const { realpathSync } = process.getBuiltinModule('node:fs') as typeof import('node:fs')
+  const absolute = ffmpeg!.includes('/') || ffmpeg!.includes('\\') ? ffmpeg! : spawnSync(process.platform === 'win32' ? 'where' : 'which', [ffmpeg!], { encoding: 'utf8' }).stdout.split(/\r?\n/)[0]
+  await select(realpathSync(absolute)); await page.getByRole('button', { name: 'ffmpeg 위치 선택' }).click()
+  await expect(page.getByText('동영상을 이 창으로 끌어다 놓으세요')).toBeVisible()
+
+  // The chosen location persists across restarts even with no search candidates.
+  await relaunch({ PHOTOKKUMI_FFMPEG_CANDIDATES: '' })
+  // Drop the video while in photo mode: the app switches to the GIF maker.
+  await drop([clip])
+  await expect(page.getByRole('tab', { name: 'GIF 만들기' })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByTestId('gif-frame')).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByText('4.0초 · 240 × 320')).toBeVisible()
+  await expect(page.getByTestId('gif-span')).toHaveText('3.0초')
+  await expect(page.getByTestId('gif-size')).toHaveText('240 × 320')
+
+  // Keyboard: move 1s, set start; move to 3.5s, set end.
+  await page.getByRole('region', { name: 'GIF 만들기' }).or(page.getByLabel('GIF 만들기', { exact: true })).first().focus()
+  await page.keyboard.press('Shift+ArrowRight'); await page.keyboard.press('[')
+  await expect(page.getByRole('spinbutton', { name: '시작 시간' })).toHaveValue('1')
+  await page.keyboard.press('Shift+ArrowRight'); await page.keyboard.press('Shift+ArrowRight')
+  for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowRight')
+  await page.keyboard.press(']')
+  await expect(page.getByRole('spinbutton', { name: '끝 시간' })).toHaveValue('3.5')
+  await expect(page.getByTestId('gif-span')).toHaveText('2.5초')
+  // Dragging the end handle to the far right selects up to the end of the clip.
+  const track = (await page.getByTestId('gif-track').boundingBox())!
+  const handle = (await page.getByRole('button', { name: '끝 핸들' }).boundingBox())!
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2); await page.mouse.down()
+  await page.mouse.move(track.x + track.width + 20, handle.y + handle.height / 2, { steps: 6 }); await page.mouse.up()
+  await expect(page.getByRole('spinbutton', { name: '끝 시간' })).toHaveValue('4')
+  await page.getByRole('spinbutton', { name: '끝 시간' }).fill('3')
+  await page.getByRole('combobox', { name: 'GIF FPS' }).selectOption('10')
+
+  await select(directory)
+  await page.getByRole('button', { name: 'GIF로 저장' }).click()
+  await expect(page.getByRole('status')).toContainText('GIF 저장 완료', { timeout: 30_000 })
+  const gif = await readFile(join(directory, 'IMG_0001_kkumi.gif'))
+  expect(gif.subarray(0, 6).toString('latin1')).toBe('GIF89a')
+  expect([gif.readUInt16LE(6), gif.readUInt16LE(8)]).toEqual([240, 320])
+  const frames = spawnSync(ffmpeg!, ['-hide_banner', '-i', join(directory, 'IMG_0001_kkumi.gif'), '-map', '0:v', '-f', 'null', '-'], { encoding: 'utf8' }).stderr
+  expect(Number(/frame=\s*(\d+)/.exec(frames.split('frame=').length > 1 ? frames.slice(frames.lastIndexOf('frame=')) : '')?.[1])).toBe(20)
+  // Saving again never overwrites the first result.
+  await page.getByRole('button', { name: 'GIF로 저장' }).click()
+  await expect(page.getByRole('status')).toContainText('IMG_0001_kkumi_1.gif', { timeout: 30_000 })
+  expect(createHash('sha256').update(await readFile(clip)).digest('hex')).toBe(originalHash)
+  expect((await readdir(join(directory, 'profile'))).includes('tools.json')).toBe(true)
+
+  // Photo editing state is independent of the GIF mode.
+  await page.getByRole('tab', { name: '사진 편집' }).click()
+  await expect(page.getByText('사진을 이 창으로 끌어다 놓으세요')).toBeVisible()
   expect(errors).toEqual([])
 })

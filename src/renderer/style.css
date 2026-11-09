@@ -139,6 +139,20 @@ aside {
 .photo-item[data-state='저장 완료'] small { color: var(--ok); }
 .photo-item[data-state='수정됨'] small, .photo-item[data-state='저장 후 수정'] small { color: #b54708; }
 
+.photo-cell { position: relative; flex: none; }
+.photo-remove {
+  position: absolute; top: -2px; right: -2px; width: 20px; height: 20px; padding: 0; border-radius: 50%;
+  font-size: 13px; line-height: 1; color: var(--muted); opacity: 0; transition: opacity .12s;
+}
+.photo-cell:hover .photo-remove, .photo-remove:focus-visible, .photo-cell:has([aria-pressed=true]) .photo-remove { opacity: 1; }
+.photo-remove:hover:not(:disabled) { color: #fff; background: var(--danger); border-color: var(--danger); }
+
+/* Drag and drop */
+.drop-target { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 40px 56px; border: 2px dashed var(--line-strong); border-radius: 14px; text-align: center; line-height: 1.5; }
+.drop-overlay { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: #5b45c92e; pointer-events: none; }
+.drop-overlay > div { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 28px 44px; border: 2px dashed var(--accent); border-radius: 14px; background: var(--surface); color: var(--muted); box-shadow: 0 10px 30px #1a1f2b26; }
+.drop-overlay strong { font-size: 16px; color: var(--accent); }
+
 /* Status line */
 .statusbar {
   flex: none; display: flex; gap: 12px; align-items: center; min-height: 26px; padding: 4px 12px;

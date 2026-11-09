@@ -3,7 +3,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PNG } from 'pngjs'
-import { PhotoStore } from '../src/main/photos'
+import { PhotoStore, validDroppedPaths } from '../src/main/photos'
 
 it('사진 ID·중복·등록 원자성·원본 변경·개수 한도를 검증한다', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'photokkumi-photos-'))
@@ -59,5 +59,28 @@ it('100장 초과 폴더를 일부 등록하지 않고 기존 사진을 보존�
     const initial = await store.add([original])
     await expect(store.addFolder(folder)).rejects.toThrow('100')
     expect(store.list()).toEqual(initial)
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
+it('끌어 놓은 파일·폴더를 기존 목록에 추가하고 동영상·기타·symlink는 제외하며 제거할 수 있다', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'photokkumi-drop-'))
+  try {
+    const fs = await import('node:fs/promises')
+    const png = PNG.sync.write(new PNG({ width: 40, height: 20 }))
+    const first = join(dir, 'a.png'), folder = join(dir, '폴더'), clip = join(dir, 'clip.mov'), link = join(dir, 'link.png')
+    await writeFile(first, png); await fs.mkdir(folder)
+    await writeFile(join(folder, '2.png'), png); await writeFile(join(folder, '1.jpg'), 'broken'); await writeFile(join(folder, 'memo.txt'), 'x')
+    await writeFile(clip, 'not decoded yet'); await fs.symlink(first, link)
+    const store = new PhotoStore(() => 'thumb')
+    const existing = await store.add([first])
+    const result = await store.addDropped([first, folder, clip, link, join(dir, 'missing.png')])
+    expect(result.photos.map(item => item.name)).toEqual(['a.png', '2.png'])
+    expect(result.photos[0].id).toBe(existing[0].id)
+    expect(result.rejected.sort()).toEqual(['1.jpg', 'clip.mov', 'link.png', 'missing.png'].sort())
+    expect(store.remove(result.photos[0].id).map(item => item.name)).toEqual(['2.png'])
+    expect(() => store.remove(result.photos[0].id)).toThrow()
+    await expect(store.read(result.photos[0].id)).rejects.toThrow()
+    for (const invalid of [[], ['relative.png'], ['/a\0b.png'], [1], Array.from({ length: 201 }, () => first), 'x']) expect(validDroppedPaths(invalid)).toBe(false)
+    await expect(store.addDropped(['relative.png'])).rejects.toThrow()
   } finally { await rm(dir, { recursive: true, force: true }) }
 })

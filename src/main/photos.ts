@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { realpath, opendir } from 'node:fs/promises'
-import { basename, dirname, extname, join } from 'node:path'
+import { realpath, opendir, lstat } from 'node:fs/promises'
+import { basename, dirname, extname, isAbsolute, join } from 'node:path'
 import type { ImageAsset, PhotoInfo } from '../shared/model'
 import { inspectImage, MAX_FILE_BYTES } from './images'
 import { readBounded } from './library'
@@ -16,6 +16,11 @@ export class PhotoStore {
     return photo
   }
   clear() { this.records.clear() }
+  remove(id: string): PhotoInfo[] {
+    this.get(id)
+    this.records.delete(id)
+    return this.list()
+  }
   async add(paths: string[], rejected?: string[], folderRoot?: string): Promise<PhotoInfo[]> {
     // Limit before I/O; stage every candidate before granting any new ID.
     if (paths.length > 100) throw new Error('사진은 최대 100장까지 열 수 있습니다.')
@@ -47,15 +52,23 @@ export class PhotoStore {
   }
   async addFolder(directory: string): Promise<{ photos: PhotoInfo[]; rejected: string[] }> {
     const root = await realpath(directory)
-    const paths: string[] = []
-    for await (const entry of await opendir(root)) {
-      if (!entry.isFile() || !['.jpg', '.jpeg', '.png'].includes(extname(entry.name).toLowerCase())) continue
-      paths.push(join(root, entry.name))
-      if (paths.length > 100) throw new Error('폴더에 사진이 100장보다 많습니다. 파일을 나누어 선택하세요.')
-    }
-    paths.sort((a, b) => basename(a).localeCompare(basename(b), 'ko', { numeric: true }))
     const rejected: string[] = []
-    return { photos: await this.add(paths, rejected, root), rejected }
+    return { photos: await this.add(await folderImages(root), rejected, root), rejected }
+  }
+  /** Files and folders dropped from the OS file manager. Folders contribute their direct JPG/PNG children only. */
+  async addDropped(inputs: string[]): Promise<{ photos: PhotoInfo[]; rejected: string[] }> {
+    if (!validDroppedPaths(inputs)) throw new Error('끌어 놓은 항목을 확인할 수 없습니다.')
+    const files: string[] = [], rejected: string[] = []
+    for (const input of inputs) {
+      let info
+      try { info = await lstat(input) } catch { rejected.push(basename(input)); continue }
+      if (info.isSymbolicLink()) rejected.push(basename(input))
+      else if (info.isDirectory()) files.push(...await folderImages(await realpath(input)))
+      else if (info.isFile() && IMAGE_EXTENSIONS.includes(extname(input).toLowerCase())) files.push(input)
+      else rejected.push(basename(input))
+      if (files.length > 100) throw new Error('사진은 최대 100장까지 열 수 있습니다. 나누어 끌어 놓으세요.')
+    }
+    return { photos: await this.add(files, rejected), rejected }
   }
   async read(id: string): Promise<ImageAsset> {
     const record = this.get(id)
@@ -64,4 +77,19 @@ export class PhotoStore {
     const { id: photoId, name, width, height, mime } = record.info
     return { id: photoId, name, width, height, mime, bytes }
   }
+}
+
+const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png']
+export function validDroppedPaths(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length > 0 && value.length <= 200
+    && value.every(item => typeof item === 'string' && item.length > 0 && item.length < 4096 && !item.includes('\0') && isAbsolute(item))
+}
+async function folderImages(root: string): Promise<string[]> {
+  const paths: string[] = []
+  for await (const entry of await opendir(root)) {
+    if (!entry.isFile() || !IMAGE_EXTENSIONS.includes(extname(entry.name).toLowerCase())) continue
+    paths.push(join(root, entry.name))
+    if (paths.length > 100) throw new Error('폴더에 사진이 100장보다 많습니다. 파일을 나누어 선택하세요.')
+  }
+  return paths.sort((a, b) => basename(a).localeCompare(basename(b), 'ko', { numeric: true }))
 }

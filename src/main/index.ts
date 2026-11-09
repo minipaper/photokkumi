@@ -12,7 +12,7 @@ import { trustedSender, validSaveRequest } from './security'
 import { StickerLibrary, readBounded } from './library'
 import { OutputStore } from './settings'
 import { outputSize, validOutput } from '../shared/output'
-import { PhotoStore } from './photos'
+import { PhotoStore, validDroppedPaths } from './photos'
 import { MAX_BACKUP_BYTES, validAssetId, validMetadata } from '../shared/library'
 
 const profile = app.commandLine.getSwitchValue('user-data-dir')
@@ -65,6 +65,13 @@ async function chooseOutputFolder(): Promise<string | null> {
   if (!(await stat(path)).isDirectory()) throw new Error('출력 폴더를 확인하세요.')
   outputDirectory = path
   return path
+}
+
+async function removePhoto(id: string) {
+  const remaining = photos.remove(id)
+  photoReferences.delete(id)
+  activeStickerIds = new Set([...photoReferences.values()].flat())
+  return remaining
 }
 
 async function save(request: SaveRequest): Promise<SaveReceipt | null> {
@@ -168,16 +175,18 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
   session.defaultSession.setPermissionCheckHandler(() => false)
   for (const [channel, action] of [
-    ['photo:choose', choosePhotos], ['photo:folder', choosePhotoFolder], ['output:folder', chooseOutputFolder], ['photo:save', save], ['photo:read', (id: string) => photos.read(id)]
+    ['photo:choose', choosePhotos], ['photo:folder', choosePhotoFolder], ['output:folder', chooseOutputFolder], ['photo:save', save], ['photo:read', (id: string) => photos.read(id)],
+    ['photo:drop', (paths: string[]) => photos.addDropped(paths)], ['photo:remove', removePhoto]
   ] as const) {
     ipcMain.handle(channel, async (event, ...args: unknown[]): Promise<Result<unknown>> => {
       if (!win || !trustedSender(event.sender.id, win.webContents.id, event.senderFrame === win.webContents.mainFrame, event.senderFrame?.url ?? '', pageUrl)) {
         return { ok: false, error: '허용되지 않은 요청입니다.' }
       }
       if (busy) return { ok: false, error: '현재 작업이 끝난 뒤 다시 시도하세요.' }
-      if (!['photo:save', 'photo:read'].includes(channel) && args.length) return { ok: false, error: '유효하지 않은 요청입니다.' }
+      if (!['photo:save', 'photo:read', 'photo:drop', 'photo:remove'].includes(channel) && args.length) return { ok: false, error: '유효하지 않은 요청입니다.' }
       if (channel === 'photo:save' && (args.length !== 1 || !validSaveRequest(args[0]))) return { ok: false, error: '유효하지 않은 저장 요청입니다.' }
-      if (channel === 'photo:read' && (args.length !== 1 || !validAssetId(args[0]))) return { ok: false, error: '유효하지 않은 사진 요청입니다.' }
+      if (channel === 'photo:drop' && (args.length !== 1 || !validDroppedPaths(args[0]))) return { ok: false, error: '끌어 놓은 항목을 확인할 수 없습니다.' }
+      if ((channel === 'photo:read' || channel === 'photo:remove') && (args.length !== 1 || !validAssetId(args[0]))) return { ok: false, error: '유효하지 않은 사진 요청입니다.' }
       busy = true
       try { return { ok: true, value: await (action as (value: unknown) => Promise<unknown>)(args[0]) } }
       catch (error) { return { ok: false, error: error instanceof Error ? error.message : '작업에 실패했습니다.' } }

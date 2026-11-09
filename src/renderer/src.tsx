@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent, type DragEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { ImageAsset, PhotoApi, PhotoInfo, Placement } from '../shared/model'
 import { validPlacement } from '../shared/model'
@@ -29,6 +29,8 @@ function App() {
   const [libraryOpen, setLibraryOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const settingsAnchor = useRef<HTMLDivElement>(null)
+  const [dragging, setDragging] = useState(false)
+  const dragDepth = useRef(0)
   const libraryDialog = useRef<HTMLDialogElement>(null)
   const [photos, setPhotos] = useState<PhotoInfo[]>([])
   const sessions = useRef(new Map<string, PhotoSession>())
@@ -73,7 +75,7 @@ function App() {
   useEffect(() => {
     const keep = new Set([...sessions.current.values()].flatMap(sessionAssets))
     for (const [id, asset] of assets.current) if (!keep.has(id)) { asset.bitmap.close(); assets.current.delete(id) }
-  }, [history, photo, dirty])
+  }, [history, photo, dirty, photos])
   useEffect(() => {
     const cache = assets.current
     return () => { for (const asset of cache.values()) asset.bitmap.close(); cache.clear() }
@@ -242,21 +244,44 @@ function App() {
   const choosePhoto = () => run(async () => {
     const result = await window.photokkumi.choosePhotos()
     if (!result.ok) throw new Error(result.error)
-    if (!result.value) return
-    for (const item of result.value) if (!sessions.current.has(item.id)) sessions.current.set(item.id, createPhotoSession())
-    setPhotos(result.value)
-    if (!activeId.current && result.value[0]) await activatePhoto(result.value[0].id)
-    setStatus('사진을 추가했습니다. 라이브러리의 스티커를 클릭해 배치하세요.')
+    if (result.value) await acceptBatch(result.value, [])
   })
-  const choosePhotoFolder = () => run(async () => {
-    const result = await window.photokkumi.choosePhotoFolder()
-    if (!result.ok) throw new Error(result.error)
-    if (!result.value) return
-    const { photos: imported, rejected } = result.value
+  async function acceptBatch(imported: PhotoInfo[], rejected: string[]) {
+    const added = imported.filter(item => !sessions.current.has(item.id)).length
     for (const item of imported) if (!sessions.current.has(item.id)) sessions.current.set(item.id, createPhotoSession())
     setPhotos(imported)
     if (!activeId.current && imported[0]) await activatePhoto(imported[0].id)
-    setStatus(`사진 ${imported.length}장 · JPG/PNG만 가져옵니다.${rejected.length ? ` 읽을 수 없는 파일 ${rejected.length}개 제외: ${rejected.slice(0, 3).join(', ')}${rejected.length > 3 ? ' 외' : ''}` : ''}`)
+    setStatus(`사진 ${added}장 추가 · 전체 ${imported.length}장.${rejected.length ? ` 지원하지 않거나 읽을 수 없는 파일 ${rejected.length}개 제외: ${rejected.slice(0, 3).join(', ')}${rejected.length > 3 ? ' 외' : ''}` : ''}`)
+  }
+  const choosePhotoFolder = () => run(async () => {
+    const result = await window.photokkumi.choosePhotoFolder()
+    if (!result.ok) throw new Error(result.error)
+    if (result.value) await acceptBatch(result.value.photos, result.value.rejected)
+  })
+  const importDropped = (files: File[]) => run(async () => {
+    const result = await window.photokkumi.importDroppedFiles(files)
+    if (!result.ok) throw new Error(result.error)
+    await acceptBatch(result.value.photos, result.value.rejected)
+  })
+  const removePhoto = (id: string) => run(async () => {
+    const index = photos.findIndex(item => item.id === id)
+    const target = photos[index], session = sessions.current.get(id)
+    if (!target || !session) return
+    if (session.dirty && !window.confirm(`${target.name}의 저장하지 않은 편집이 사라집니다. 목록에서 제거할까요?`)) return
+    if (activeId.current === id) {
+      const neighbor = photos[index + 1] ?? photos[index - 1]
+      if (neighbor) await activatePhoto(neighbor.id)
+    }
+    const result = await window.photokkumi.removePhoto(id)
+    if (!result.ok) throw new Error(result.error)
+    sessions.current.delete(id)
+    if (activeId.current === id) {
+      activeId.current = null
+      const next = emptyHistory()
+      currentHistory.current = next; setHistory(next); setPhoto(null); setDirty(false)
+    }
+    setPhotos(result.value)
+    setStatus(`${target.name}을(를) 목록에서 제거했습니다. 원본 파일은 그대로입니다.`)
   })
   const chooseOutputFolder = () => run(async () => {
     const result = await window.photokkumi.chooseOutputFolder()
@@ -334,7 +359,20 @@ function App() {
   const outputSummary = `${output.format === 'jpg' ? 'JPG' : 'PNG'} · ${output.resizeEnabled ? `${output.resizeBasis === 'width' ? '가로' : '긴 축'} ${output.landscapeSize}/${output.portraitSize}px` : '원본 크기'}`
   const photoState = (session: PhotoSession) => session.dirty ? (session.saved ? '저장 후 수정' : '수정됨') : session.saved ? (session.outputKey !== outputKey(output) ? '출력 설정 변경' : session.savedFolder !== outputFolder ? '출력 폴더 변경' : '저장 완료') : '미작업'
   const canSave = !busy && !!photo && outputLoaded && !outputError
-  return <main onKeyDown={handleEditorKey}>
+  const hasFiles = (event: DragEvent) => Array.from(event.dataTransfer.types).includes('Files')
+  const dropBlocked = busy || !!pendingPhoto || !!closeRequest || libraryOpen
+  return <main onKeyDown={handleEditorKey}
+    onDragEnter={event => { if (!hasFiles(event)) return; event.preventDefault(); dragDepth.current++; setDragging(true) }}
+    onDragOver={event => { if (!hasFiles(event)) return; event.preventDefault(); event.dataTransfer.dropEffect = dropBlocked ? 'none' : 'copy' }}
+    onDragLeave={event => { if (!hasFiles(event)) return; dragDepth.current = Math.max(0, dragDepth.current - 1); if (!dragDepth.current) setDragging(false) }}
+    onDrop={event => {
+      if (!hasFiles(event)) return
+      event.preventDefault(); dragDepth.current = 0; setDragging(false)
+      if (dropBlocked) { setStatus('진행 중인 작업이나 열린 창을 닫은 뒤 다시 끌어 놓으세요.'); return }
+      const files = Array.from(event.dataTransfer.files)
+      if (files.length) void importDropped(files)
+    }}>
+    {dragging && <div className="drop-overlay" aria-hidden="true"><div><strong>여기에 놓으면 불러옵니다</strong><span>JPG·PNG 사진 또는 사진이 든 폴더</span></div></div>}
     <dialog ref={libraryDialog} className="library-dialog" aria-label="스티커 관리" onCancel={event => { event.preventDefault(); closeLibrary() }}>
       {libraryOpen && <>
         <div className="manager-heading"><h2>스티커 관리</h2><button disabled={busy} onClick={closeLibrary}>관리 닫기</button></div>
@@ -365,7 +403,7 @@ function App() {
       <h1>포토꾸미</h1>
       <nav aria-label="파일 작업" className="toolbar-group">
         <button onClick={choosePhoto} disabled={busy || !!pendingPhoto}>사진 열기</button>
-        <button onClick={choosePhotoFolder} disabled={busy || !!pendingPhoto}>입력 폴더 선택</button>
+        <button onClick={choosePhotoFolder} disabled={busy || !!pendingPhoto}>폴더 열기</button>
       </nav>
       <div className="toolbar-group" aria-label="편집 이력">
         <button className="icon" aria-label="실행 취소" title="실행 취소 (Ctrl+Z)" disabled={busy || !history.past.length} onClick={() => applyHistory(undoScene(currentHistory.current))}><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M5.5 3.5 2.5 6.5l3 3"/><path d="M2.5 6.5h7a4 4 0 0 1 0 8H7"/></svg></button>
@@ -406,7 +444,7 @@ function App() {
       <div className="canvas-column">
         {photo ? <EditorCanvas key={photo.id} photo={photo} assets={assets.current} scene={scene} disabled={busy} onSelect={selectInstance} onChange={(id, value) => change(value, id)}
           info={<>{photo.name} · {photo.width} × {photo.height} px{outputLabel && outputLabel !== `${photo.width} × ${photo.height} px` ? ` → ${outputLabel}` : ''} · <b className={dirty ? 'dirty' : ''}>{dirty ? '수정됨' : '원본 / 저장됨'}</b></>} />
-          : <div className="empty"><strong>사진을 열어 시작하세요</strong><span>위의 <b>사진 열기</b> 또는 <b>입력 폴더 선택</b>으로 JPG·PNG 사진을 불러오세요.</span></div>}
+          : <div className="empty"><div className="drop-target"><strong>사진을 이 창으로 끌어다 놓으세요</strong><span>탐색기에서 JPG·PNG 사진 여러 장이나 폴더를 한 번에 끌어 놓으면 바로 불러옵니다.</span><span>또는 위의 <b>사진 열기</b> · <b>폴더 열기</b></span></div></div>}
       </div>
       <aside>
         <div className="library-pane" hidden={libraryOpen}><LibraryPanel {...libraryProps} mode="pick" onManage={() => setLibraryOpen(true)} /></div>
@@ -445,11 +483,14 @@ function App() {
         {photos.map((item, index) => {
           const session = sessions.current.get(item.id)!
           const state = photoState(session)
-          return <button key={item.id} className="photo-item" data-state={state} disabled={busy} aria-label={`사진 ${index + 1}: ${item.name}`} aria-pressed={photo?.id === item.id} onClick={() => requestPhoto(item.id)} title={`${item.name} · ${state}`}>
-            <img src={item.thumbnail} alt="" width="80" height="60" loading="lazy" />
-            <span>{index + 1}. {item.name}</span>
-            <small>{state}</small>
-          </button>
+          return <div key={item.id} className="photo-cell">
+            <button className="photo-item" data-state={state} disabled={busy} aria-label={`사진 ${index + 1}: ${item.name}`} aria-pressed={photo?.id === item.id} onClick={() => requestPhoto(item.id)} title={`${item.name} · ${state}`}>
+              <img src={item.thumbnail} alt="" width="80" height="60" loading="lazy" />
+              <span>{index + 1}. {item.name}</span>
+              <small>{state}</small>
+            </button>
+            <button className="photo-remove" disabled={busy || !!pendingPhoto} aria-label={`${item.name} 목록에서 제거`} title="목록에서 제거 (원본 파일은 유지)" onClick={() => removePhoto(item.id)}>×</button>
+          </div>
         })}
       </div>
     </section>}

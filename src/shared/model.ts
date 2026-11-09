@@ -37,6 +37,8 @@ export interface PhotoApi {
   choosePhotos(): Promise<Result<PhotoInfo[] | null>>
   readPhoto(id: string): Promise<Result<ImageAsset>>
   choosePhotoFolder(): Promise<Result<PhotoBatch | null>>
+  importDroppedFiles(files: File[]): Promise<Result<PhotoBatch>>
+  removePhoto(id: string): Promise<Result<PhotoInfo[]>>
   chooseOutputFolder(): Promise<Result<string | null>>
   getOutputSettings(): Promise<Result<OutputSettings>>
   updateOutputSettings(output: OutputSettings): Promise<Result<OutputSettings>>

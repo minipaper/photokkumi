@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { PhotoApi } from '../shared/model'
 let closeCallback: ((requestId: string) => void) | null = null
 let queuedClose: string | null = null
@@ -25,6 +25,12 @@ const api: PhotoApi = {
   choosePhotos: () => ipcRenderer.invoke('photo:choose'),
   readPhoto: id => ipcRenderer.invoke('photo:read', id),
   choosePhotoFolder: () => ipcRenderer.invoke('photo:folder'),
+  // Only OS-backed File objects from a real drop resolve to a path; the renderer never sees or sends raw paths.
+  importDroppedFiles: files => {
+    const paths = Array.from(files).slice(0, 200).map(file => { try { return webUtils.getPathForFile(file) } catch { return '' } }).filter(Boolean)
+    return paths.length ? ipcRenderer.invoke('photo:drop', paths) : Promise.resolve({ ok: false, error: '끌어 놓은 항목에서 파일을 찾지 못했습니다.' })
+  },
+  removePhoto: id => ipcRenderer.invoke('photo:remove', id),
   chooseOutputFolder: () => ipcRenderer.invoke('output:folder'),
   getOutputSettings: () => ipcRenderer.invoke('output:get'),
   updateOutputSettings: output => ipcRenderer.invoke('output:update', output),

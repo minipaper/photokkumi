@@ -1,5 +1,5 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
-import { mkdtemp, readFile, writeFile, rm, readdir } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile, rm, readdir, realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -191,7 +191,7 @@ test('안전한 창 설정·IPC 거부·잘못된 이미지 거부', async () =>
     return { sandbox: p.sandbox, contextIsolation: p.contextIsolation, nodeIntegration: p.nodeIntegration }
   })
   expect(prefs).toEqual({ sandbox: true, contextIsolation: true, nodeIntegration: false })
-  expect(await page.evaluate(() => Object.keys(window.photokkumi).sort())).toEqual(['backupLibrary', 'cancelGif', 'checkForUpdate', 'chooseGifTool', 'chooseOutputFolder', 'choosePhotoFolder', 'choosePhotos', 'createGif', 'deleteSticker', 'downloadUpdate', 'getOutputSettings', 'getUpdateState', 'gifToolStatus', 'importDroppedFiles', 'importDroppedStickers', 'importStickers', 'installUpdate', 'listStickers', 'loadVideo', 'locateGifTool', 'onCloseRequested', 'onGifProgress', 'onUpdateState', 'openVideo', 'readPhoto', 'removePhoto', 'resolveClose', 'restoreLibrary', 'saveImage', 'setStickerReferences', 'updateOutputSettings', 'updateSticker', 'useSticker'])
+  expect(await page.evaluate(() => Object.keys(window.photokkumi).sort())).toEqual(['backupLibrary', 'cancelGif', 'checkForUpdate', 'chooseGifTool', 'chooseOutputFolder', 'choosePhotoFolder', 'choosePhotos', 'createGif', 'deleteSticker', 'downloadUpdate', 'getOutputFolder', 'getOutputSettings', 'getUpdateState', 'gifToolStatus', 'importDroppedFiles', 'importDroppedStickers', 'importStickers', 'installUpdate', 'listStickers', 'loadVideo', 'locateGifTool', 'onCloseRequested', 'onGifProgress', 'onUpdateState', 'openVideo', 'readPhoto', 'removePhoto', 'resolveClose', 'restoreLibrary', 'saveImage', 'setStickerReferences', 'updateOutputSettings', 'updateSticker', 'useSticker'])
   expect(await page.evaluate(() => typeof (window as unknown as { require?: unknown }).require)).toBe('undefined')
   const invalid = await page.evaluate(() => window.photokkumi.saveImage({ photoId: '../../anything', png: new Uint8Array(), output: { format: 'png', resizeEnabled: false, resizeBasis: 'width', landscapeSize: 1600, portraitSize: 900, preventUpscale: true, quality: 100 } }))
   expect(invalid.ok).toBe(false)
@@ -828,7 +828,21 @@ test('투명 PNG와 반투명 스티커는 PNG 알파와 JPG 흰 배경·품질 
     const settings = await page.evaluate(() => window.photokkumi.getOutputSettings())
     return settings.ok ? settings.value.landscapeSize : null
   }).toBe(200)
+  // Region defaults are a UI preference that also survives a restart.
+  await page.getByRole('button', { name: /^저장 설정/ }).click()
+  await page.getByRole('tab', { name: /가림/ }).click()
+  await page.getByRole('radio', { name: '▭ 사각형' }).click(); await page.getByRole('radio', { name: '모자이크' }).click()
+  await page.getByRole('spinbutton', { name: '가림 강도', exact: true }).fill('70')
   await restartWithLibrary()
+  // The folder of the last save is used again without asking (the dialog stub would cancel).
+  await expect(page.getByTestId('output-folder')).toHaveText(await realpath(directory))
+  await page.getByRole('tab', { name: /가림/ }).click()
+  await expect(page.getByRole('radio', { name: '▭ 사각형' })).toHaveAttribute('aria-checked', 'true')
+  await expect(page.getByRole('radio', { name: '모자이크' })).toHaveAttribute('aria-checked', 'true')
+  await expect(page.getByRole('spinbutton', { name: '가림 강도', exact: true })).toHaveValue('70')
+  await select(source); await page.getByRole('button', { name: '사진 열기', exact: true }).click()
+  await select(null); await saveKey()
+  await expect(page.getByRole('status')).toContainText('저장 완료')
   await settings(); await expect(page.getByRole('combobox', { name: '출력 형식', exact: true })).toHaveValue('jpg')
   await settings(); await expect(page.getByRole('spinbutton', { name: 'JPG 품질', exact: true })).toHaveValue('100')
   await settings(); await expect(page.getByRole('spinbutton', { name: '가로 사진 길이', exact: true })).toHaveValue('200')

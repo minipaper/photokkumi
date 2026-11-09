@@ -8,6 +8,11 @@ import { EditorCanvas } from './EditorCanvas'
 import { GifMaker } from './GifMaker'
 import type { VideoRef } from '../shared/gif'
 import type { UpdateState } from '../shared/update'
+import { loadPref, savePref } from './remember'
+const validRegionEffect = (value: unknown): value is { style: 'blur' | 'mosaic'; strength: number; shape: 'ellipse' | 'rect' } => {
+  const v = value as Record<string, unknown> | null
+  return !!v && typeof v === 'object' && ['blur', 'mosaic'].includes(v.style as string) && typeof v.strength === 'number' && validStrength(v.strength) && ['ellipse', 'rect'].includes(v.shape as string)
+}
 import { addInstance, addRegion, clearRegions, setAdjustments, updateSelectedRegion, validStrength, updateSelected, removeSelected, duplicateSelected, reorderSelected, emptyHistory, commitScene, undoScene, redoScene, MAX_INSTANCES, MAX_DECODED_STICKER_PIXELS, type Scene, type SceneHistory } from '../shared/scene'
 import { createPhotoSession, editPhotoSession, savePhotoSession, discardPhotoSession, sessionAssets, type PhotoSession } from '../shared/photo-session'
 import { DEFAULT_OUTPUT, validOutput, outputSize, outputKey, type OutputSettings } from '../shared/output'
@@ -61,7 +66,7 @@ function App() {
   const region = scene.regions.find(item => item.id === scene.selectedId) ?? null
   const selection: Placement | null = placement ?? region
   type RegionEffect = { style: RegionStyle; strength: number; shape: RegionShape }
-  const [regionDefaults, setRegionDefaults] = useState<RegionEffect>({ style: 'blur', strength: 50, shape: 'ellipse' })
+  const [regionDefaults, setRegionDefaults] = useState<RegionEffect>(() => loadPref('pk.regionDefaults', { style: 'blur', strength: 50, shape: 'ellipse' }, validRegionEffect))
   const liveBase = useRef<Scene | null>(null)
   const [sideTab, setSideTab] = useState<'stickers' | 'regions' | 'adjust'>('stickers')
   const [mode, setMode] = useState<'photo' | 'gif'>('photo')
@@ -139,6 +144,7 @@ function App() {
   function changeRegionEffect(effect: RegionEffect, live = false) {
     if (!validStrength(effect.strength)) return
     setRegionDefaults(effect)
+    savePref('pk.regionDefaults', effect)
     const current = currentHistory.current.present
     if (!current.regions.some(item => item.id === current.selectedId)) return
     const next = updateSelectedRegion(current, effect)
@@ -197,6 +203,8 @@ function App() {
     const result = await window.photokkumi.getOutputSettings()
     if (!result.ok) throw new Error(result.error)
     setOutput(result.value); setOutputLoaded(true)
+    const folder = await window.photokkumi.getOutputFolder()
+    if (folder.ok) setOutputFolder(folder.value)
   }) }, [])
   useEffect(() => {
     if (!outputLoaded || !validOutput(output)) return

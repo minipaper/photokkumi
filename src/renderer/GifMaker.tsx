@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
+import { loadPref, savePref } from './remember'
 import { DEFAULT_GIF, GIF_FPS, GIF_WIDTHS, MAX_GIF_SECONDS, gifFrameCount, validGifOptions, type GifReceipt, type ToolStatus, type VideoRef } from '../shared/gif'
 
 interface Loaded { id: string; name: string; duration: number; width: number; height: number; previewFps: number; urls: string[] }
@@ -27,8 +28,8 @@ export function GifMaker({ incoming, outputFolder, onSaved, onStatus, onError, o
   const [range, setRange] = useState({ start: 0, end: 0 })
   const [playhead, setPlayhead] = useState(0)
   const [playing, setPlaying] = useState(false)
-  const [width, setWidth] = useState<number>(DEFAULT_GIF.width)
-  const [fps, setFps] = useState<number>(DEFAULT_GIF.fps)
+  const [width, setWidth] = useState<number>(() => loadPref('pk.gifWidth', DEFAULT_GIF.width, (v): v is number => (GIF_WIDTHS as readonly unknown[]).includes(v)))
+  const [fps, setFps] = useState<number>(() => loadPref('pk.gifFps', DEFAULT_GIF.fps, (v): v is number => (GIF_FPS as readonly unknown[]).includes(v)))
   const [progress, setProgress] = useState(0)
   const root = useRef<HTMLDivElement>(null)
   const track = useRef<HTMLDivElement>(null)
@@ -190,9 +191,9 @@ export function GifMaker({ incoming, outputFolder, onSaved, onStatus, onError, o
       <div className="gif-fields">
         <label>시작 (초)<input type="number" aria-label="시작 시간" min="0" step="0.1" disabled={busy} value={range.start} onChange={e => Number.isFinite(e.target.valueAsNumber) && setBoundary('start', e.target.valueAsNumber)} /></label>
         <label>끝 (초)<input type="number" aria-label="끝 시간" min="0" step="0.1" disabled={busy} value={range.end} onChange={e => Number.isFinite(e.target.valueAsNumber) && setBoundary('end', e.target.valueAsNumber)} /></label>
-        <label>너비<select aria-label="GIF 너비" disabled={busy} value={width} onChange={e => setWidth(Number(e.target.value))}>
+        <label>너비<select aria-label="GIF 너비" disabled={busy} value={width} onChange={e => { const v = Number(e.target.value); setWidth(v); savePref('pk.gifWidth', v) }}>
           {GIF_WIDTHS.map(item => <option key={item} value={item}>{item}px</option>)}</select></label>
-        <label>FPS<select aria-label="GIF FPS" disabled={busy} value={fps} onChange={e => setFps(Number(e.target.value))}>
+        <label>FPS<select aria-label="GIF FPS" disabled={busy} value={fps} onChange={e => { const v = Number(e.target.value); setFps(v); savePref('pk.gifFps', v) }}>
           {GIF_FPS.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
       </div>
       <dl className="gif-summary">

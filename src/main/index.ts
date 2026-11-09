@@ -1,7 +1,7 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, protocol, session } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, protocol, screen, session } from 'electron'
 import { mkdirSync, readFileSync } from 'node:fs'
 import { readFile, realpath, stat, lstat, unlink } from 'node:fs/promises'
-import { basename, delimiter, extname, join, resolve, sep } from 'node:path'
+import { basename, delimiter, dirname, extname, join, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { ImageAsset, Result, SaveRequest, SaveReceipt } from '../shared/model'
 import { imageSize } from 'image-size'
@@ -18,6 +18,7 @@ import { VIDEO_EXTENSIONS, validGifOptions, gifArgs, previewArgs, previewFps, pa
 import type { ChildProcess } from 'node:child_process'
 import { autoUpdater } from 'electron-updater'
 import { UpdateController } from './updater'
+import { PrefsStore, type WindowBounds } from './prefs'
 import { MAX_BACKUP_BYTES, validAssetId, validMetadata } from '../shared/library'
 
 const profile = app.commandLine.getSwitchValue('user-data-dir')
@@ -43,6 +44,9 @@ const photos = new PhotoStore(bytes => {
   return nativeImage.createFromBitmap(Buffer.from(oriented.bytes), { width: oriented.width, height: oriented.height }).toDataURL()
 })
 const outputStore = new OutputStore(app.getPath('userData'))
+// Output folder, last photo folder and window placement survive restarts (userData/prefs.json).
+const prefs = new PrefsStore(app.getPath('userData'))
+const remember = (patch: Parameters<PrefsStore['update']>[0]) => { void prefs.update(patch).catch(() => undefined) }
 // Tests may replace the search list (unpackaged builds only) to exercise the "not installed" flow.
 const candidateOverride = !app.isPackaged ? process.env.PHOTOKKUMI_FFMPEG_CANDIDATES : undefined
 const tools = new ToolStore(app.getPath('userData'), candidateOverride === undefined ? undefined : async () => candidateOverride.split(delimiter).filter(Boolean))
@@ -65,21 +69,35 @@ const developmentUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : und
 const pageUrl = developmentUrl ? new URL(developmentUrl).href : 'app://bundle/index.html'
 
 async function choosePhotos() {
-  const result = await dialog.showOpenDialog(win!, { title: '사진 열기', properties: ['openFile', 'multiSelections'], filters: [{ name: 'JPG / PNG', extensions: ['jpg', 'jpeg', 'png'] }] })
-  return result.canceled || !result.filePaths.length ? null : photos.add(result.filePaths)
+  const result = await dialog.showOpenDialog(win!, { title: '사진 열기', defaultPath: await photoDefault(), properties: ['openFile', 'multiSelections'], filters: [{ name: 'JPG / PNG', extensions: ['jpg', 'jpeg', 'png'] }] })
+  if (result.canceled || !result.filePaths.length) return null
+  remember({ photoFolder: dirname(result.filePaths[0]) })
+  return photos.add(result.filePaths)
 }
 
 async function choosePhotoFolder() {
-  const selected = await dialog.showOpenDialog(win!, { title: '입력 폴더 선택', properties: ['openDirectory'] })
+  const selected = await dialog.showOpenDialog(win!, { title: '입력 폴더 선택', defaultPath: await photoDefault(), properties: ['openDirectory'] })
   if (selected.canceled || !selected.filePaths[0]) return null
+  remember({ photoFolder: selected.filePaths[0] })
   return photos.addFolder(selected.filePaths[0])
 }
+/** Last photo folder as the dialog's starting point, if it still exists. */
+async function photoDefault(): Promise<string | undefined> {
+  const folder = (await prefs.get()).photoFolder
+  return folder && await isDirectory(folder) ? folder : undefined
+}
+async function isDirectory(path: string) { try { return (await stat(path)).isDirectory() } catch { return false } }
+function setOutputDirectory(path: string) {
+  if (outputDirectory === path) return
+  outputDirectory = path
+  remember({ outputFolder: path })
+}
 async function chooseOutputFolder(): Promise<string | null> {
-  const selected = await dialog.showOpenDialog(win!, { title: '출력 폴더 선택', properties: ['openDirectory', 'createDirectory'] })
+  const selected = await dialog.showOpenDialog(win!, { title: '출력 폴더 선택', defaultPath: outputDirectory ?? undefined, properties: ['openDirectory', 'createDirectory'] })
   if (selected.canceled || !selected.filePaths[0]) return null
   const path = await realpath(selected.filePaths[0])
   if (!(await stat(path)).isDirectory()) throw new Error('출력 폴더를 확인하세요.')
-  outputDirectory = path
+  setOutputDirectory(path)
   return path
 }
 
@@ -139,7 +157,7 @@ async function createGif(id: string, options: GifOptions): Promise<GifReceipt | 
     try {
       const target = await realpath(directory)
       const name = basename(await saveUnique(target, record.path, bytes, '.gif'))
-      outputDirectory = target
+      setOutputDirectory(target)
       return { name, folderLabel: target, bytes: bytes.length }
     } catch (error) {
       if (error instanceof SaveCleanupError) throw error
@@ -187,7 +205,7 @@ async function save(request: SaveRequest): Promise<SaveReceipt | null> {
   try {
     const target = await realpath(directory)
     const name = basename(await saveUnique(target, record.path, encoded, request.output.format === 'jpg' ? '.jpg' : '.png'))
-    outputDirectory = target
+    setOutputDirectory(target)
     return { name, folderLabel: target }
   }
   catch (error) {
@@ -196,18 +214,29 @@ async function save(request: SaveRequest): Promise<SaveReceipt | null> {
   }
 }
 
-function createWindow() {
+/** Restore the last window placement only while it is still mostly on a connected display. */
+function visibleBounds(bounds: WindowBounds | null): WindowBounds | null {
+  if (!bounds) return null
+  const onScreen = screen.getAllDisplays().some(({ workArea: a }) =>
+    Math.min(bounds.x + bounds.width, a.x + a.width) - Math.max(bounds.x, a.x) >= 120 && Math.min(bounds.y + bounds.height, a.y + a.height) - Math.max(bounds.y, a.y) >= 80)
+  return onScreen ? bounds : null
+}
+function createWindow(saved: WindowBounds | null = null) {
   if (!app.isPackaged && process.platform === 'darwin') app.dock?.setIcon(join(__dirname, '../../build/icon.png'))
+  const bounds = visibleBounds(saved)
   win = new BrowserWindow({
-    width: 1180, height: 820, minWidth: 760, minHeight: 580, title: '포토꾸미',
+    ...(bounds ? { x: bounds.x, y: bounds.y, width: Math.max(760, bounds.width), height: Math.max(580, bounds.height) } : { width: 1180, height: 820 }),
+    minWidth: 760, minHeight: 580, title: '포토꾸미',
     // Packaged builds take the icon from the exe (electron-builder win.icon); dev runs point at the same file.
     ...(app.isPackaged ? {} : { icon: join(__dirname, '../../build/icon.png') }),
     webPreferences: { preload: join(__dirname, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true,
       // Saves and GIF encoding must not slow to a crawl when the window is behind another one.
       backgroundThrottling: false }
   })
+  if (bounds?.maximized) win.maximize()
   allowClose = false; pendingClose = null; quitRequested = false
   win.on('close', event => {
+    if (win && !win.isMinimized()) { const b = win.getNormalBounds(); prefs.updateSync({ window: { x: b.x, y: b.y, width: b.width, height: b.height, maximized: win.isMaximized() } }) }
     if (allowClose || (!photos.list().length && !busy && !settingsPending)) return
     event.preventDefault()
     if (!pendingClose) {
@@ -220,7 +249,7 @@ function createWindow() {
   win.webContents.on('will-navigate', event => event.preventDefault())
   win.webContents.on('will-attach-webview', event => event.preventDefault())
   win.on('closed', () => { if (installOnClose) { installOnClose = false; updates.install() }
-    cancelGif(); videos.clear(); win = null; outputDirectory = null; photos.clear(); photoReferences.clear(); pendingClose = null; activeStickerIds.clear(); permittedStickerIds.clear() })
+    cancelGif(); videos.clear(); win = null; photos.clear(); photoReferences.clear(); pendingClose = null; activeStickerIds.clear(); permittedStickerIds.clear() })
   void win.loadURL(pageUrl)
 }
 
@@ -413,8 +442,17 @@ app.whenReady().then(() => {
       catch (error) { return { ok: false, error: error instanceof Error ? error.message : '업데이트 작업에 실패했습니다.' } }
     })
   }
-  createWindow()
-  app.on('activate', () => { if (!win) createWindow() })
+  ipcMain.handle('output:current', (event, ...args: unknown[]): Result<string | null> => {
+    if (!win || !trustedSender(event.sender.id, win.webContents.id, event.senderFrame === win.webContents.mainFrame, event.senderFrame?.url ?? '', pageUrl)) return { ok: false, error: '허용되지 않은 요청입니다.' }
+    if (args.length) return { ok: false, error: '유효하지 않은 요청입니다.' }
+    return { ok: true, value: outputDirectory }
+  })
+  // The saved output folder is used again only if it still exists; otherwise the first save asks as before.
+  void prefs.get().then(async saved => {
+    if (saved.outputFolder && await isDirectory(saved.outputFolder)) outputDirectory = await realpath(saved.outputFolder).catch(() => null)
+    createWindow(saved.window)
+  })
+  app.on('activate', () => { if (!win) void prefs.get().then(saved => createWindow(saved.window)) })
   // Quiet check shortly after start, then every 6 hours while the app stays open.
   setTimeout(() => { void updates.check() }, 5_000)
   setInterval(() => { void updates.check() }, 6 * 60 * 60 * 1000)

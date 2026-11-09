@@ -64,6 +64,8 @@ export interface PhotoApi {
   onGifProgress(callback: (ratio: number) => void): () => void
   removePhoto(id: string): Promise<Result<PhotoInfo[]>>
   chooseOutputFolder(): Promise<Result<string | null>>
+  /** Output folder remembered from earlier runs (null until one is chosen). */
+  getOutputFolder(): Promise<Result<string | null>>
   getOutputSettings(): Promise<Result<OutputSettings>>
   updateOutputSettings(output: OutputSettings): Promise<Result<OutputSettings>>
   saveImage(request: SaveRequest): Promise<Result<SaveReceipt | null>>

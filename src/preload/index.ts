@@ -59,6 +59,7 @@ const api: PhotoApi = {
     return () => { ipcRenderer.removeListener('gif:progress', listener) }
   },
   chooseOutputFolder: () => ipcRenderer.invoke('output:folder'),
+  getOutputFolder: () => ipcRenderer.invoke('output:current'),
   getOutputSettings: () => ipcRenderer.invoke('output:get'),
   updateOutputSettings: output => ipcRenderer.invoke('output:update', output),
   saveImage: (request) => ipcRenderer.invoke('photo:save', request)

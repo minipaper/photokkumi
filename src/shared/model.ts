@@ -1,6 +1,7 @@
 import type { OutputSettings } from './output'
 import type { GifOptions, GifReceipt, ToolStatus, VideoInfo, VideoRef } from './gif'
 import type { LibrarySticker, StickerMetadata, LibraryImportResult } from './library'
+import type { UpdateState } from './update'
 export type AssetKind = 'photo' | 'sticker'
 export interface ImageAsset {
   id: string
@@ -45,6 +46,12 @@ export interface PhotoApi {
   readPhoto(id: string): Promise<Result<ImageAsset>>
   choosePhotoFolder(): Promise<Result<PhotoBatch | null>>
   importDroppedFiles(files: File[]): Promise<Result<DropBatch>>
+  getUpdateState(): Promise<Result<UpdateState>>
+  checkForUpdate(): Promise<Result<UpdateState>>
+  downloadUpdate(): Promise<Result<UpdateState>>
+  /** Closes the window (unsaved-edit prompt first), then installs and restarts. */
+  installUpdate(): Promise<Result<null>>
+  onUpdateState(callback: (state: UpdateState) => void): () => void
   /** Registers PNGs dropped on the sticker library; non-PNG items come back in `rejected`. */
   importDroppedStickers(files: File[]): Promise<Result<LibraryImportResult & { rejected: string[] }>>
   gifToolStatus(): Promise<Result<ToolStatus>>

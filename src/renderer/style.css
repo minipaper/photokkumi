@@ -255,6 +255,14 @@ button.disclosure:hover { color: var(--text); background: none; }.region-panel {
 .statusbar p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .statusbar .shortcuts { color: var(--muted); }
 .statusbar [role=alert] { flex: 1 1 auto; min-width: 0; }
+.update-area { margin-left: auto; flex: none; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.update-area .update-note { display: inline-flex; align-items: center; gap: 6px; color: var(--text); }
+.update-area .update-note.error { color: var(--danger); }
+.update-area progress { width: 80px; height: 6px; }
+.update-area button.small { height: 22px; padding: 0 8px; font-size: 12px; }
+.update-area button.link.version { color: var(--muted); font-variant-numeric: tabular-nums; }
+.update-area button.link.version:hover:not(:disabled) { color: var(--accent); text-decoration: underline; }
+.update-area button.link.version:disabled { opacity: 1; cursor: default; }
 
 /* Dialogs */
 dialog { border: 1px solid var(--line); border-radius: 12px; padding: 22px; color: inherit; max-width: 420px; box-shadow: 0 20px 50px #1a1f2b40; }

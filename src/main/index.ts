@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, protocol, session } from 'electron'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { readFile, realpath, stat, lstat, unlink } from 'node:fs/promises'
 import { basename, delimiter, extname, join, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -16,6 +16,8 @@ import { PhotoStore, validDroppedPaths } from './photos'
 import { ToolStore, VideoStore, runTool } from './ffmpeg'
 import { VIDEO_EXTENSIONS, validGifOptions, gifArgs, previewArgs, previewFps, parseProbe, splitJpegs, parseProgress, type GifOptions, type GifReceipt, type VideoInfo, type VideoRef } from '../shared/gif'
 import type { ChildProcess } from 'node:child_process'
+import { autoUpdater } from 'electron-updater'
+import { UpdateController } from './updater'
 import { MAX_BACKUP_BYTES, validAssetId, validMetadata } from '../shared/library'
 
 const profile = app.commandLine.getSwitchValue('user-data-dir')
@@ -51,6 +53,12 @@ let outputDirectory: string | null = null
 let busy = false
 let settingsPending = 0
 let pendingClose: string | null = null
+// Auto-update: packaged Windows builds only (unsigned macOS builds cannot self-update).
+// Unpackaged runs started from out/main report Electron's own version, so read the project version instead.
+const appVersion = app.isPackaged ? app.getVersion() : (JSON.parse(readFileSync(join(__dirname, '../../package.json'), 'utf8')) as { version: string }).version
+const updates = new UpdateController(app.isPackaged && process.platform === 'win32' ? autoUpdater : null, appVersion, state => win?.webContents.send('update:state', state))
+/** "다시 시작해서 설치" closes the window through the normal unsaved-edit flow first; the installer runs only once it has closed. */
+let installOnClose = false
 let allowClose = false
 let quitRequested = false
 const developmentUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined
@@ -211,7 +219,8 @@ function createWindow() {
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.webContents.on('will-navigate', event => event.preventDefault())
   win.webContents.on('will-attach-webview', event => event.preventDefault())
-  win.on('closed', () => { cancelGif(); videos.clear(); win = null; outputDirectory = null; photos.clear(); photoReferences.clear(); pendingClose = null; activeStickerIds.clear(); permittedStickerIds.clear() })
+  win.on('closed', () => { if (installOnClose) { installOnClose = false; updates.install() }
+    cancelGif(); videos.clear(); win = null; outputDirectory = null; photos.clear(); photoReferences.clear(); pendingClose = null; activeStickerIds.clear(); permittedStickerIds.clear() })
   void win.loadURL(pageUrl)
 }
 
@@ -377,7 +386,7 @@ app.whenReady().then(() => {
       return { ok: false, error: '유효하지 않은 종료 요청입니다.' }
     }
     if (value.action === 'cancel') {
-      pendingClose = null; quitRequested = false
+      pendingClose = null; quitRequested = false; installOnClose = false
       return { ok: true, value: null }
     }
     if (busy || settingsPending) return { ok: false, error: '작업이 끝난 뒤 닫을 수 있습니다.' }
@@ -385,8 +394,30 @@ app.whenReady().then(() => {
     setImmediate(() => { if (quitRequested) app.quit(); else win?.close() })
     return { ok: true, value: null }
   })
+  const updateActions: Record<string, () => Promise<unknown>> = {
+    'update:get': async () => updates.get(),
+    'update:check': async () => updates.check(),
+    'update:download': async () => updates.download(),
+    'update:install': async () => {
+      if (!updates.ready) throw new Error('설치할 업데이트가 없습니다.')
+      installOnClose = true
+      win?.close()
+      return null
+    }
+  }
+  for (const [channel, action] of Object.entries(updateActions)) {
+    ipcMain.handle(channel, async (event, ...args: unknown[]): Promise<Result<unknown>> => {
+      if (!win || !trustedSender(event.sender.id, win.webContents.id, event.senderFrame === win.webContents.mainFrame, event.senderFrame?.url ?? '', pageUrl)) return { ok: false, error: '허용되지 않은 요청입니다.' }
+      if (args.length) return { ok: false, error: '유효하지 않은 요청입니다.' }
+      try { return { ok: true, value: await action() } }
+      catch (error) { return { ok: false, error: error instanceof Error ? error.message : '업데이트 작업에 실패했습니다.' } }
+    })
+  }
   createWindow()
   app.on('activate', () => { if (!win) createWindow() })
+  // Quiet check shortly after start, then every 6 hours while the app stays open.
+  setTimeout(() => { void updates.check() }, 5_000)
+  setInterval(() => { void updates.check() }, 6 * 60 * 60 * 1000)
 })
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
 

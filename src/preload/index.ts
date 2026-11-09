@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { PhotoApi } from '../shared/model'
+import { validUpdateState } from '../shared/update'
 let closeCallback: ((requestId: string) => void) | null = null
 let queuedClose: string | null = null
 ipcRenderer.on('window:close-requested', (_event, requestId: unknown) => {
@@ -36,6 +37,15 @@ const api: PhotoApi = {
     return paths.length ? ipcRenderer.invoke('library:drop', paths) : Promise.resolve({ ok: false, error: '끌어 놓은 항목에서 파일을 찾지 못했습니다.' })
   },
   removePhoto: id => ipcRenderer.invoke('photo:remove', id),
+  getUpdateState: () => ipcRenderer.invoke('update:get'),
+  checkForUpdate: () => ipcRenderer.invoke('update:check'),
+  downloadUpdate: () => ipcRenderer.invoke('update:download'),
+  installUpdate: () => ipcRenderer.invoke('update:install'),
+  onUpdateState: callback => {
+    const listener = (_event: unknown, state: unknown) => { if (validUpdateState(state)) callback(state) }
+    ipcRenderer.on('update:state', listener)
+    return () => { ipcRenderer.removeListener('update:state', listener) }
+  },
   gifToolStatus: () => ipcRenderer.invoke('gif:tool-status'),
   locateGifTool: () => ipcRenderer.invoke('gif:tool-locate'),
   chooseGifTool: () => ipcRenderer.invoke('gif:tool-choose'),

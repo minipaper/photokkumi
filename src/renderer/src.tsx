@@ -7,6 +7,7 @@ import { LibraryPanel } from './LibraryPanel'
 import { EditorCanvas } from './EditorCanvas'
 import { GifMaker } from './GifMaker'
 import type { VideoRef } from '../shared/gif'
+import type { UpdateState } from '../shared/update'
 import { addInstance, addRegion, clearRegions, setAdjustments, updateSelectedRegion, validStrength, updateSelected, removeSelected, duplicateSelected, reorderSelected, emptyHistory, commitScene, undoScene, redoScene, MAX_INSTANCES, MAX_DECODED_STICKER_PIXELS, type Scene, type SceneHistory } from '../shared/scene'
 import { createPhotoSession, editPhotoSession, savePhotoSession, discardPhotoSession, sessionAssets, type PhotoSession } from '../shared/photo-session'
 import { DEFAULT_OUTPUT, validOutput, outputSize, outputKey, type OutputSettings } from '../shared/output'
@@ -32,6 +33,14 @@ function App() {
   const [libraryOpen, setLibraryOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const settingsAnchor = useRef<HTMLDivElement>(null)
+  const [update, setUpdate] = useState<UpdateState | null>(null)
+  const [dismissedUpdate, setDismissedUpdate] = useState<string | null>(null)
+  useEffect(() => {
+    let alive = true
+    void window.photokkumi.getUpdateState().then(result => { if (alive && result.ok) setUpdate(result.value) })
+    const off = window.photokkumi.onUpdateState(state => setUpdate(state))
+    return () => { alive = false; off() }
+  }, [])
   const [dragging, setDragging] = useState<false | 'photos' | 'stickers'>(false)
   // Numeric position fields stay folded until wanted; the choice is a per-viewer convenience.
   const [fieldsOpen, setFieldsOpen] = useState(() => { try { return localStorage.getItem('pk.placementFields') === 'open' } catch { return false } })
@@ -412,6 +421,15 @@ function App() {
     return true
   }
   const save = () => run(async () => { await saveCurrent() })
+  async function updateAction(action: 'check' | 'download' | 'install') {
+    setError('')
+    const result = action === 'check' ? await window.photokkumi.checkForUpdate() : action === 'download' ? await window.photokkumi.downloadUpdate() : await window.photokkumi.installUpdate()
+    if (!result.ok) { setError(result.error); return }
+    if (action === 'install') return
+    const state = result.value as UpdateState
+    setUpdate(state)
+    if (action === 'check') { setDismissedUpdate(null); setStatus(state.status === 'idle' ? `최신 버전입니다 (v${state.current}).` : state.status === 'available' ? `새 버전 ${state.version}이 있습니다.` : '') }
+  }
   const photoIndex = photos.findIndex(item => item.id === photo?.id)
   const saveNext = () => run(async () => {
     if (!photo) return
@@ -683,7 +701,26 @@ function App() {
         })}
       </div>
     </section>}
-    <footer className="statusbar"><p role="status" aria-live="polite">{status || (mode === 'photo' && photo ? <span className="shortcuts">Ctrl+S 저장 · Ctrl+Z 실행 취소 · Ctrl+D 복제 · Delete 삭제 · B 블러·모자이크 · Ctrl+휠 확대</span> : '')}</p>{error && !libraryOpen && !pendingPhoto && <p role="alert">{error}</p>}</footer>
+    <footer className="statusbar"><p role="status" aria-live="polite">{status || (mode === 'photo' && photo ? <span className="shortcuts">Ctrl+S 저장 · Ctrl+Z 실행 취소 · Ctrl+D 복제 · Delete 삭제 · B 블러·모자이크 · Ctrl+휠 확대</span> : '')}</p>{error && !libraryOpen && !pendingPhoto && <p role="alert">{error}</p>}
+      <div className="update-area" role="group" aria-label="업데이트">
+        {update?.status === 'available' && dismissedUpdate !== update.version && <>
+          <span className="update-note">새 버전 {update.version}</span>
+          <button className="primary small" onClick={() => void updateAction('download')}>업데이트</button>
+          <button className="link" onClick={() => setDismissedUpdate(update.version ?? null)}>나중에</button>
+        </>}
+        {update?.status === 'downloading' && <span className="update-note">새 버전 {update.version} 내려받는 중 <progress max={100} value={update.percent ?? 0} aria-label="업데이트 내려받는 중" /> {update.percent ?? 0}%</span>}
+        {update?.status === 'ready' && <>
+          <span className="update-note">새 버전 {update.version} 준비됨</span>
+          <button className="primary small" title="저장하지 않은 편집이 있으면 먼저 저장 여부를 묻습니다" onClick={() => void updateAction('install')}>다시 시작해서 설치</button>
+        </>}
+        {update?.status === 'error' && <>
+          <span className="update-note error">{update.message}</span>
+          <button className="small" onClick={() => void updateAction('download')}>다시 시도</button>
+        </>}
+        {update && <button className="link version" disabled={update.status === 'unsupported' || update.status === 'downloading'}
+          title={update.status === 'unsupported' ? '설치한 Windows 앱에서만 업데이트를 확인합니다' : '업데이트 확인'} onClick={() => void updateAction('check')}>v{update.current}</button>}
+      </div>
+    </footer>
   </main>
 }
 createRoot(document.getElementById('root')!).render(<App />)

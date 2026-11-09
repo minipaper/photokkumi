@@ -191,7 +191,7 @@ test('안전한 창 설정·IPC 거부·잘못된 이미지 거부', async () =>
     return { sandbox: p.sandbox, contextIsolation: p.contextIsolation, nodeIntegration: p.nodeIntegration }
   })
   expect(prefs).toEqual({ sandbox: true, contextIsolation: true, nodeIntegration: false })
-  expect(await page.evaluate(() => Object.keys(window.photokkumi).sort())).toEqual(['backupLibrary', 'cancelGif', 'chooseGifTool', 'chooseOutputFolder', 'choosePhotoFolder', 'choosePhotos', 'createGif', 'deleteSticker', 'getOutputSettings', 'gifToolStatus', 'importDroppedFiles', 'importDroppedStickers', 'importStickers', 'listStickers', 'loadVideo', 'locateGifTool', 'onCloseRequested', 'onGifProgress', 'openVideo', 'readPhoto', 'removePhoto', 'resolveClose', 'restoreLibrary', 'saveImage', 'setStickerReferences', 'updateOutputSettings', 'updateSticker', 'useSticker'])
+  expect(await page.evaluate(() => Object.keys(window.photokkumi).sort())).toEqual(['backupLibrary', 'cancelGif', 'checkForUpdate', 'chooseGifTool', 'chooseOutputFolder', 'choosePhotoFolder', 'choosePhotos', 'createGif', 'deleteSticker', 'downloadUpdate', 'getOutputSettings', 'getUpdateState', 'gifToolStatus', 'importDroppedFiles', 'importDroppedStickers', 'importStickers', 'installUpdate', 'listStickers', 'loadVideo', 'locateGifTool', 'onCloseRequested', 'onGifProgress', 'onUpdateState', 'openVideo', 'readPhoto', 'removePhoto', 'resolveClose', 'restoreLibrary', 'saveImage', 'setStickerReferences', 'updateOutputSettings', 'updateSticker', 'useSticker'])
   expect(await page.evaluate(() => typeof (window as unknown as { require?: unknown }).require)).toBe('undefined')
   const invalid = await page.evaluate(() => window.photokkumi.saveImage({ photoId: '../../anything', png: new Uint8Array(), output: { format: 'png', resizeEnabled: false, resizeBasis: 'width', landscapeSize: 1600, portraitSize: 900, preventUpscale: true, quality: 100 } }))
   expect(invalid.ok).toBe(false)
@@ -199,6 +199,21 @@ test('안전한 창 설정·IPC 거부·잘못된 이미지 거부', async () =>
   expect((await page.evaluate(() => window.photokkumi.importDroppedFiles([new File(['x'], '/etc/passwd')]))).ok).toBe(false)
   expect((await page.evaluate(() => window.photokkumi.importDroppedStickers([new File(['x'], '/etc/passwd')]))).ok).toBe(false)
   expect((await page.evaluate(() => window.photokkumi.removePhoto('../../anything'))).ok).toBe(false)
+  // Auto-update is off outside a packaged Windows build; the version label stays, actions are refused.
+  const version = (JSON.parse(await readFile(resolve('package.json'), 'utf8')) as { version: string }).version
+  await expect(page.getByRole('button', { name: `v${version}`, exact: true })).toBeDisabled()
+  expect((await page.evaluate(() => window.photokkumi.downloadUpdate())).ok).toBe(false)
+  expect((await page.evaluate(() => window.photokkumi.installUpdate())).ok).toBe(false)
+  // Forged state pushes are dropped by the preload; valid ones render the notice.
+  const push = (state: unknown) => app.evaluate(({ BrowserWindow }, value) => BrowserWindow.getAllWindows()[0].webContents.send('update:state', value), state)
+  await push({ status: 'available', current: version, version: '<img src=x>' })
+  await expect(page.getByRole('group', { name: '업데이트' }).getByRole('button', { name: '업데이트', exact: true })).toHaveCount(0)
+  await push({ status: 'available', current: version, version: '9.9.9' })
+  await expect(page.getByText('새 버전 9.9.9')).toBeVisible()
+  await page.getByRole('button', { name: '나중에', exact: true }).click()
+  await expect(page.getByText('새 버전 9.9.9')).toHaveCount(0)
+  await push({ status: 'ready', current: version, version: '9.9.9' })
+  await expect(page.getByRole('button', { name: '다시 시작해서 설치', exact: true })).toBeVisible()
   expect((await page.evaluate(() => window.photokkumi.loadVideo('../../etc/passwd'))).ok).toBe(false)
   expect((await page.evaluate(() => window.photokkumi.loadVideo('00000000-0000-4000-8000-000000000000'))).ok).toBe(false)
   expect((await page.evaluate(() => window.photokkumi.createGif('00000000-0000-4000-8000-000000000000', { start: 0, end: 1, width: 480, fps: 12 }))).ok).toBe(false)

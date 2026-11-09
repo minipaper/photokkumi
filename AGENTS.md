@@ -24,6 +24,7 @@
 - 이미지 합성/리사이즈: Canvas 기반으로 먼저 수직 기능을 검증한다. 큰 사진의 메모리·품질 요구로 Sharp 등의 네이티브 모듈이 필요하면 Windows 패키징까지 검증한 뒤 도입한다.
 - 테스트: Vitest, React Testing Library, Playwright의 Electron 테스트 지원을 검토해 사용한다.
 - Windows 패키징: electron-builder, x64 NSIS 설치 파일을 우선한다. 업데이트 서버·코드 서명·배포 게시를 임의로 설정하지 않는다.
+  - 승인된 예외(2026-11-09): 사용자 요청으로 `v*` 태그 → GitHub Actions 빌드 → **draft** Release, 그리고 `electron-updater`(GitHub provider, 공개 Release만)로 자동 업데이트. 다운로드·설치는 사용자가 누를 때만, 설치는 미저장 편집 확인을 거친 뒤. 세부는 `docs/release.md`.
 - Node/Electron 버전은 구현 시 지원 중인 호환 버전을 선정하고 README와 버전 설정 파일에 기록한다.
 
 권장 구조(구현 전 빈 파일/빈 폴더를 전부 만들 필요는 없음):

@@ -90,7 +90,7 @@ test.beforeEach(async () => {
   await writeFile(stickerPath, makePng(80, 40, (x, y) => y >= 30 ? [0, 0, 0, 0] : x < 40 ? [255, 0, 0, 255] : [0, 255, 0, 255]))
   const factor = test.info().project.metadata.deviceScaleFactor
   const scaleArgs = typeof factor === 'number' ? [`--force-device-scale-factor=${factor}`] : []
-  app = await electron.launch({ args: [resolve('out/main/index.js'), `--user-data-dir=${join(directory, 'profile')}`, ...scaleArgs], env: { ...process.env, ELECTRON_RENDERER_URL: '' } })
+  app = await electron.launch({ args: [resolve('out/main/index.js'), `--user-data-dir=${join(directory, 'profile')}`, ...scaleArgs], env: { ...process.env, ELECTRON_RENDERER_URL: '', PHOTOKKUMI_DEFAULT_STICKERS: 'none' } })
   page = await app.firstWindow()
   page.on('pageerror', error => errors.push(error.message))
   // The title is hidden below 960px (small CI screens at 200%), so wait for a control that is always shown.
@@ -365,7 +365,7 @@ test('앱 종료 메뉴 요청에서 버리기를 선택하면 프로세스까�
 async function restartWithLibrary() {
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().forEach(window => window.destroy()))
   await app.close().catch(error => { if (!page.isClosed()) throw error })
-  app = await electron.launch({ args: [resolve('out/main/index.js'), `--user-data-dir=${join(directory, 'profile')}`], env: { ...process.env, ELECTRON_RENDERER_URL: '' } })
+  app = await electron.launch({ args: [resolve('out/main/index.js'), `--user-data-dir=${join(directory, 'profile')}`], env: { ...process.env, ELECTRON_RENDERER_URL: '', PHOTOKKUMI_DEFAULT_STICKERS: 'none' } })
   page = await app.firstWindow()
   page.on('pageerror', error => errors.push(error.message))
   // The title is hidden below 960px (small CI screens at 200%), so wait for a control that is always shown.
@@ -1105,6 +1105,19 @@ test('빈 라이브러리는 바로 등록 버튼을 보여 주고, 스티커 �
   expect(errors).toEqual([])
 })
 
+test('기본 동물 스티커는 첫 실행에 한 번만 들어오고, 지운 스티커는 다시 시작해도 돌아오지 않는다', async () => {
+  const pack = { PHOTOKKUMI_DEFAULT_STICKERS: resolve('resources/default-stickers') }
+  await relaunch(pack)
+  await expect(page.getByRole('button', { name: '고양이 정면 배치', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '너구리 뒷모습 배치', exact: true })).toBeAttached()
+  await openManager(); await page.getByRole('button', { name: '고양이 정면 삭제', exact: true }).click()
+  await page.getByRole('button', { name: '삭제 확인', exact: true }).click(); await closeManager()
+  await expect(page.getByRole('button', { name: '고양이 정면 배치', exact: true })).toHaveCount(0)
+  await relaunch(pack)
+  await expect(page.getByRole('button', { name: '토끼 정면 배치', exact: true })).toBeAttached()
+  await expect(page.getByRole('button', { name: '고양이 정면 배치', exact: true })).toHaveCount(0)
+})
+
 test('블러·모자이크 영역을 드래그로 그리고 이동·강도 조절·undo 후 저장 결과에서 원본 픽셀을 가린다', async () => {
   // Vertical 2px stripes: any blur turns the inside gray, mosaic turns each block into one flat color.
   await writeFile(source, makePng(1200, 800, x => Math.floor(x / 2) % 2 ? [255, 255, 255, 255] : [0, 0, 0, 255]))
@@ -1261,7 +1274,7 @@ function findFfmpeg() {
 async function relaunch(env: Record<string, string>) {
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().forEach(window => window.destroy()))
   await app.close().catch(error => { if (!page.isClosed()) throw error })
-  app = await electron.launch({ args: [resolve('out/main/index.js'), `--user-data-dir=${join(directory, 'profile')}`], env: { ...process.env, ELECTRON_RENDERER_URL: '', ...env } })
+  app = await electron.launch({ args: [resolve('out/main/index.js'), `--user-data-dir=${join(directory, 'profile')}`], env: { ...process.env, ELECTRON_RENDERER_URL: '', PHOTOKKUMI_DEFAULT_STICKERS: 'none', ...env } })
   page = await app.firstWindow()
   page.on('pageerror', error => errors.push(error.message))
   // The title is hidden below 960px (small CI screens at 200%), so wait for a control that is always shown.

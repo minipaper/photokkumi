@@ -10,6 +10,7 @@ import { inspectImage, MAX_OUTPUT_BYTES } from './images'
 import { saveUnique, SaveCleanupError } from './files'
 import { trustedSender, validSaveRequest } from './security'
 import { StickerLibrary, readBounded } from './library'
+import { seedDefaultStickers } from './defaults'
 import { OutputStore } from './settings'
 import { outputSize, validOutput } from '../shared/output'
 import { PhotoStore, validDroppedPaths } from './photos'
@@ -48,6 +49,10 @@ const outputStore = new OutputStore(app.getPath('userData'))
 const prefs = new PrefsStore(app.getPath('userData'))
 const remember = (patch: Parameters<PrefsStore['update']>[0]) => { void prefs.update(patch).catch(() => undefined) }
 // Tests may replace the search list (unpackaged builds only) to exercise the "not installed" flow.
+// Dev/E2E may point elsewhere or pass "none"; packaged builds always use the shipped resources.
+const defaultStickerOverride = !app.isPackaged ? process.env.PHOTOKKUMI_DEFAULT_STICKERS : undefined
+const defaultStickerRoot = app.isPackaged ? join(process.resourcesPath, 'default-stickers')
+  : defaultStickerOverride === 'none' ? null : defaultStickerOverride ? resolve(defaultStickerOverride) : join(__dirname, '../../resources/default-stickers')
 const candidateOverride = !app.isPackaged ? process.env.PHOTOKKUMI_FFMPEG_CANDIDATES : undefined
 const tools = new ToolStore(app.getPath('userData'), candidateOverride === undefined ? undefined : async () => candidateOverride.split(delimiter).filter(Boolean))
 const videos = new VideoStore()
@@ -256,7 +261,14 @@ function createWindow(saved: WindowBounds | null = null) {
 app.whenReady().then(() => {
   if (!primaryInstance) { app.quit(); return }
   // Keep a rejected load promise so a damaged manifest can never become an empty overwrite.
-  const loadedLibrary = library.load()
+  // Default stickers are added once per pack after the library loads; list requests wait for it.
+  // A failure here only skips the defaults (retried next start) and never blocks the user's library.
+  const loadedLibrary = library.load().then(async () => {
+    try {
+      const pack = await seedDefaultStickers(library, defaultStickerRoot, (await prefs.get()).defaultStickers)
+      if (pack) await prefs.update({ defaultStickers: pack })
+    } catch { /* defaults are optional */ }
+  })
   void loadedLibrary.catch(() => undefined)
   const bundleRoot = resolve(__dirname, '../renderer')
   const thumbnails = new Map<string, Buffer>()

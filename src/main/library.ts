@@ -6,6 +6,7 @@ import type { LibraryManifest, LibrarySticker, StickerMetadata } from '../shared
 import { MAX_BACKUP_BYTES, MAX_LIBRARY_BYTES, MAX_MANIFEST_BYTES, MAX_STICKERS, parseManifest, validAssetId, validMetadata } from '../shared/library'
 import { inspectImage, MAX_FILE_BYTES } from './images'
 import { createBackup, readBackup } from './zip'
+export interface BundledSticker { path: string; name: string; category: string }
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
 
 export async function readBounded(path: string, max: number): Promise<Buffer> {
@@ -120,6 +121,21 @@ export class StickerLibrary {
     await this.merge(candidates)
     const stickers = this.list()
     return { stickers, importedIds: candidates.map(item => stickers.find(asset => asset.hash === item.asset.hash)!.id) }
+  }
+  /**
+   * App-shipped stickers. Unlike a user import this never fails on the library limit: duplicates
+   * (already registered by hash) are skipped and only as many as still fit are added.
+   */
+  async addBundled(items: BundledSticker[]) {
+    const current = this.list(), known = new Set(current.map(item => item.hash))
+    const fresh: ReturnType<StickerLibrary['prepare']>[] = []
+    for (const item of items) {
+      const candidate = this.prepare(await readBounded(item.path, MAX_FILE_BYTES), { name: item.name, originalName: basename(item.path), category: item.category, favorite: false })
+      if (known.has(candidate.asset.hash)) continue
+      known.add(candidate.asset.hash); fresh.push(candidate)
+    }
+    await this.merge(fresh.slice(0, Math.max(0, MAX_STICKERS - current.length)))
+    return this.list()
   }
   async update(id: string, metadata: StickerMetadata) {
     if (!validAssetId(id) || !validMetadata(metadata)) throw new Error('잘못된 스티커 메타데이터입니다.')

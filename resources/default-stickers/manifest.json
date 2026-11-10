@@ -1,0 +1,145 @@
+{
+  "pack": 1,
+  "stickers": [
+    {
+      "file": "animal/cat-front.png",
+      "name": "고양이 정면",
+      "category": "animal"
+    },
+    {
+      "file": "animal/cat-left-three-quarter.png",
+      "name": "고양이 왼쪽 반측면",
+      "category": "animal"
+    },
+    {
+      "file": "animal/cat-left-profile.png",
+      "name": "고양이 왼쪽 옆",
+      "category": "animal"
+    },
+    {
+      "file": "animal/cat-right-three-quarter.png",
+      "name": "고양이 오른쪽 반측면",
+      "category": "animal"
+    },
+    {
+      "file": "animal/cat-right-profile.png",
+      "name": "고양이 오른쪽 옆",
+      "category": "animal"
+    },
+    {
+      "file": "animal/cat-looking-down.png",
+      "name": "고양이 아래 보기",
+      "category": "animal"
+    },
+    {
+      "file": "animal/cat-back.png",
+      "name": "고양이 뒷모습",
+      "category": "animal"
+    },
+    {
+      "file": "animal/bunny-front.png",
+      "name": "토끼 정면",
+      "category": "animal"
+    },
+    {
+      "file": "animal/bunny-left-three-quarter.png",
+      "name": "토끼 왼쪽 반측면",
+      "category": "animal"
+    },
+    {
+      "file": "animal/bunny-left-profile.png",
+      "name": "토끼 왼쪽 옆",
+      "category": "animal"
+    },
+    {
+      "file": "animal/bunny-right-three-quarter.png",
+      "name": "토끼 오른쪽 반측면",
+      "category": "animal"
+    },
+    {
+      "file": "animal/bunny-right-profile.png",
+      "name": "토끼 오른쪽 옆",
+      "category": "animal"
+    },
+    {
+      "file": "animal/bunny-looking-down.png",
+      "name": "토끼 아래 보기",
+      "category": "animal"
+    },
+    {
+      "file": "animal/bunny-back.png",
+      "name": "토끼 뒷모습",
+      "category": "animal"
+    },
+    {
+      "file": "animal/lamb-front.png",
+      "name": "양 정면",
+      "category": "animal"
+    },
+    {
+      "file": "animal/lamb-left-three-quarter.png",
+      "name": "양 왼쪽 반측면",
+      "category": "animal"
+    },
+    {
+      "file": "animal/lamb-left-profile.png",
+      "name": "양 왼쪽 옆",
+      "category": "animal"
+    },
+    {
+      "file": "animal/lamb-right-three-quarter.png",
+      "name": "양 오른쪽 반측면",
+      "category": "animal"
+    },
+    {
+      "file": "animal/lamb-right-profile.png",
+      "name": "양 오른쪽 옆",
+      "category": "animal"
+    },
+    {
+      "file": "animal/lamb-looking-down.png",
+      "name": "양 아래 보기",
+      "category": "animal"
+    },
+    {
+      "file": "animal/lamb-back.png",
+      "name": "양 뒷모습",
+      "category": "animal"
+    },
+    {
+      "file": "animal/raccoon-front.png",
+      "name": "너구리 정면",
+      "category": "animal"
+    },
+    {
+      "file": "animal/raccoon-left-three-quarter.png",
+      "name": "너구리 왼쪽 반측면",
+      "category": "animal"
+    },
+    {
+      "file": "animal/raccoon-left-profile.png",
+      "name": "너구리 왼쪽 옆",
+      "category": "animal"
+    },
+    {
+      "file": "animal/raccoon-right-three-quarter.png",
+      "name": "너구리 오른쪽 반측면",
+      "category": "animal"
+    },
+    {
+      "file": "animal/raccoon-right-profile.png",
+      "name": "너구리 오른쪽 옆",
+      "category": "animal"
+    },
+    {
+      "file": "animal/raccoon-looking-down.png",
+      "name": "너구리 아래 보기",
+      "category": "animal"
+    },
+    {
+      "file": "animal/raccoon-back.png",
+      "name": "너구리 뒷모습",
+      "category": "animal"
+    }
+  ]
+}

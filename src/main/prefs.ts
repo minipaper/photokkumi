@@ -6,8 +6,8 @@ import { readBounded } from './library'
 
 /** Main-process preferences kept across restarts (userData/prefs.json). Paths never come from the renderer. */
 export interface WindowBounds { x: number; y: number; width: number; height: number; maximized: boolean }
-export interface Prefs { outputFolder: string | null; photoFolder: string | null; window: WindowBounds | null }
-const EMPTY: Prefs = { outputFolder: null, photoFolder: null, window: null }
+export interface Prefs { outputFolder: string | null; photoFolder: string | null; window: WindowBounds | null; defaultStickers: number }
+const EMPTY: Prefs = { outputFolder: null, photoFolder: null, window: null, defaultStickers: 0 }
 const int = (value: unknown, min: number, max: number) => typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max
 export function validBounds(value: unknown): value is WindowBounds {
   if (!value || typeof value !== 'object') return false
@@ -29,7 +29,9 @@ export class PrefsStore {
       this.cache = {
         outputFolder: value?.schemaVersion === 1 && validFolder(value.outputFolder) ? value.outputFolder : null,
         photoFolder: value?.schemaVersion === 1 && validFolder(value.photoFolder) ? value.photoFolder : null,
-        window: value?.schemaVersion === 1 && validBounds(value.window) ? value.window : null
+        window: value?.schemaVersion === 1 && validBounds(value.window) ? value.window : null,
+        // Default sticker pack already added once (0 = none); see defaults.ts.
+        defaultStickers: value?.schemaVersion === 1 && int(value.defaultStickers, 0, 1_000_000) ? value.defaultStickers as number : 0
       }
     } catch { this.cache = { ...EMPTY } }
     return this.cache
@@ -57,6 +59,7 @@ export class PrefsStore {
       if (next.outputFolder !== null && !validFolder(next.outputFolder)) next.outputFolder = null
       if (next.photoFolder !== null && !validFolder(next.photoFolder)) next.photoFolder = null
       if (next.window !== null && !validBounds(next.window)) next.window = null
+      if (!int(next.defaultStickers, 0, 1_000_000)) next.defaultStickers = 0
       this.cache = next
       await fs.mkdir(this.directory, { recursive: true })
       const temporary = join(this.directory, `.prefs-${randomUUID()}.tmp`)

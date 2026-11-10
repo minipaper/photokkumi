@@ -9,7 +9,7 @@ import { URL } from 'node:url'
 // Regenerates docs/images/*.png from synthetic art: npm run build && npm run shots (needs ffmpeg for the GIF shot; resizing uses macOS sips).
 const ROOT = process.cwd(), OUT = resolve(ROOT, 'docs/images-raw'), W = 1280, H = 800
 const dir = await mkdtemp(join(tmpdir(), 'pk-readme-')), saved = join(dir, '결과'); await mkdir(saved); await mkdir(OUT, { recursive: true })
-const launch = (profile = 'profile') => electron.launch({ args: ['--force-device-scale-factor=2', resolve(ROOT, 'out/main/index.js'), `--user-data-dir=${join(dir, profile)}`], env: { ...process.env, ELECTRON_RENDERER_URL: '' } })
+const launch = (profile = 'profile') => electron.launch({ args: ['--force-device-scale-factor=2', resolve(ROOT, 'out/main/index.js'), `--user-data-dir=${join(dir, profile)}`], env: { ...process.env, ELECTRON_RENDERER_URL: '', PHOTOKKUMI_DEFAULT_STICKERS: 'none' } })
 let app = await launch(), page = await app.firstWindow()
 await app.evaluate(({ BrowserWindow }, [w, h]) => { const b = BrowserWindow.getAllWindows()[0]; b.setContentSize(w, h); b.center() }, [W, H])
 await page.getByRole('button', { name: '사진 열기', exact: true }).waitFor()

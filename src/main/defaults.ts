@@ -5,10 +5,11 @@ import type { StickerLibrary, BundledSticker } from './library'
 
 /**
  * Default sticker pack shipped with the app (resources/default-stickers).
- * manifest.json: { pack: <positive int>, stickers: [{ file: "animal/x.png", name, category }] }.
- * The pack number is remembered in prefs so each pack is added once: stickers the user deletes stay deleted.
+ * manifest.json: { pack: <latest>, stickers: [{ file: "animal/x.png", name, category, pack: <added in> }] }.
+ * The latest pack number is remembered in prefs; a later start adds only stickers from newer packs,
+ * so stickers the user deleted from an earlier pack stay deleted.
  */
-export interface BundledPack { pack: number; stickers: BundledSticker[] }
+export interface BundledPack { pack: number; stickers: (BundledSticker & { pack: number })[] }
 
 export async function readBundledPack(root: string): Promise<BundledPack> {
   const value = JSON.parse((await readBounded(join(root, 'manifest.json'), 64 * 1024)).toString('utf8')) as Record<string, unknown>
@@ -17,9 +18,11 @@ export async function readBundledPack(root: string): Promise<BundledPack> {
     const file = item?.file
     if (typeof file !== 'string' || !/^[a-z0-9-]+\/[a-z0-9-]+\.png$/.test(file) || isAbsolute(file)) throw new Error('기본 스티커 경로가 잘못되었습니다.')
     if (!validMetadata({ name: item.name, category: item.category, favorite: false })) throw new Error('기본 스티커 이름이 잘못되었습니다.')
+    const since = item.pack
+    if (!Number.isInteger(since) || (since as number) < 1 || (since as number) > (value.pack as number)) throw new Error('기본 스티커 팩 번호가 잘못되었습니다.')
     const path = normalize(join(root, file))
     if (!path.startsWith(normalize(root) + sep)) throw new Error('기본 스티커 경로가 잘못되었습니다.')
-    return { path, name: item.name as string, category: item.category as string }
+    return { path, name: item.name as string, category: item.category as string, pack: since as number }
   })
   return { pack: value.pack as number, stickers }
 }
@@ -29,6 +32,6 @@ export async function seedDefaultStickers(library: StickerLibrary, root: string 
   if (!root) return null
   const bundle = await readBundledPack(root)
   if (bundle.pack <= seeded) return null
-  await library.addBundled(bundle.stickers)
+  await library.addBundled(bundle.stickers.filter(item => item.pack > seeded).map(({ path, name, category }) => ({ path, name, category })))
   return bundle.pack
 }

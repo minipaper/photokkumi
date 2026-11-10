@@ -1,145 +1,245 @@
 {
-  "pack": 1,
+  "pack": 2,
   "stickers": [
     {
       "file": "animal/cat-front.png",
       "name": "고양이 정면",
-      "category": "animal"
+      "category": "animal",
+      "pack": 1
     },
     {
       "file": "animal/cat-left-three-quarter.png",
       "name": "고양이 왼쪽 반측면",
-      "category": "animal"
+      "category": "animal",
+      "pack": 1
     },
     {
       "file": "animal/cat-left-profile.png",
       "name": "고양이 왼쪽 옆",
-      "category": "animal"
+      "category": "animal",
+      "pack": 1
     },
     {
       "file": "animal/cat-right-three-quarter.png",
       "name": "고양이 오른쪽 반측면",
-      "category": "animal"
+      "category": "animal",
+      "pack": 1
     },
     {
       "file": "animal/cat-right-profile.png",
       "name": "고양이 오른쪽 옆",
-      "category": "animal"
+      "category": "animal",
+      "pack": 1
     },
     {
       "file": "animal/cat-looking-down.png",
       "name": "고양이 아래 보기",
-      "category": "animal"
+      "category": "animal",
+      "pack": 1
     },
     {
       "file": "animal/cat-back.png",
       "name": "고양이 뒷모습",
-      "category": "animal"
+      "category": "animal",
+      "pack": 1
     },
     {
       "file": "animal/bunny-front.png",
       "name": "토끼 정면",
-      "category": "animal"
+      "category": "animal",
+      "pack": 1
     },
     {
       "file": "animal/bunny-left-three-quarter.png",
       "name": "토끼 왼쪽 반측면",
-      "category": "animal"
+      "category": "animal",
+      "pack": 1
     },
     {
       "file": "animal/bunny-left-profile.png",
       "name": "토끼 왼쪽 옆",
-      "category": "animal"
+      "category": "animal",
+      "pack": 1
     },
     {
       "file": "animal/bunny-right-three-quarter.png",
       "name": "토끼 오른쪽 반측면",
-      "category": "animal"
+      "category": "animal",
+      "pack": 1
     },
     {
       "file": "animal/bunny-right-profile.png",
       "name": "토끼 오른쪽 옆",
-      "category": "animal"
+      "category": "animal",
+      "pack": 1
     },
     {
       "file": "animal/bunny-looking-down.png",
       "name": "토끼 아래 보기",
-      "category": "animal"
+      "category": "animal",
+      "pack": 1
     },
     {
       "file": "animal/bunny-back.png",
       "name": "토끼 뒷모습",
-      "category": "animal"
+      "category": "animal",
+      "pack": 1
     },
     {
       "file": "animal/lamb-front.png",
       "name": "양 정면",
-      "category": "animal"
+      "category": "animal",
+      "pack": 1
     },
     {
       "file": "animal/lamb-left-three-quarter.png",
       "name": "양 왼쪽 반측면",
-      "category": "animal"
+      "category": "animal",
+      "pack": 1
     },
     {
       "file": "animal/lamb-left-profile.png",
       "name": "양 왼쪽 옆",
-      "category": "animal"
+      "category": "animal",
+      "pack": 1
     },
     {
       "file": "animal/lamb-right-three-quarter.png",
       "name": "양 오른쪽 반측면",
-      "category": "animal"
+      "category": "animal",
+      "pack": 1
     },
     {
       "file": "animal/lamb-right-profile.png",
       "name": "양 오른쪽 옆",
-      "category": "animal"
+      "category": "animal",
+      "pack": 1
     },
     {
       "file": "animal/lamb-looking-down.png",
       "name": "양 아래 보기",
-      "category": "animal"
+      "category": "animal",
+      "pack": 1
     },
     {
       "file": "animal/lamb-back.png",
       "name": "양 뒷모습",
-      "category": "animal"
+      "category": "animal",
+      "pack": 1
     },
     {
       "file": "animal/raccoon-front.png",
       "name": "너구리 정면",
-      "category": "animal"
+      "category": "animal",
+      "pack": 1
     },
     {
       "file": "animal/raccoon-left-three-quarter.png",
       "name": "너구리 왼쪽 반측면",
-      "category": "animal"
+      "category": "animal",
+      "pack": 1
     },
     {
       "file": "animal/raccoon-left-profile.png",
       "name": "너구리 왼쪽 옆",
-      "category": "animal"
+      "category": "animal",
+      "pack": 1
     },
     {
       "file": "animal/raccoon-right-three-quarter.png",
       "name": "너구리 오른쪽 반측면",
-      "category": "animal"
+      "category": "animal",
+      "pack": 1
     },
     {
       "file": "animal/raccoon-right-profile.png",
       "name": "너구리 오른쪽 옆",
-      "category": "animal"
+      "category": "animal",
+      "pack": 1
     },
     {
       "file": "animal/raccoon-looking-down.png",
       "name": "너구리 아래 보기",
-      "category": "animal"
+      "category": "animal",
+      "pack": 1
     },
     {
       "file": "animal/raccoon-back.png",
       "name": "너구리 뒷모습",
-      "category": "animal"
+      "category": "animal",
+      "pack": 1
+    },
+    {
+      "file": "deco/heart-soft.png",
+      "name": "하트",
+      "category": "deco",
+      "pack": 2
+    },
+    {
+      "file": "deco/heart-outline.png",
+      "name": "하트 테두리",
+      "category": "deco",
+      "pack": 2
+    },
+    {
+      "file": "deco/heart-pair.png",
+      "name": "하트 두 개",
+      "category": "deco",
+      "pack": 2
+    },
+    {
+      "file": "deco/sparkle.png",
+      "name": "반짝이",
+      "category": "deco",
+      "pack": 2
+    },
+    {
+      "file": "deco/sparkle-cluster.png",
+      "name": "반짝이 묶음",
+      "category": "deco",
+      "pack": 2
+    },
+    {
+      "file": "deco/star.png",
+      "name": "별",
+      "category": "deco",
+      "pack": 2
+    },
+    {
+      "file": "deco/daisy.png",
+      "name": "데이지",
+      "category": "deco",
+      "pack": 2
+    },
+    {
+      "file": "deco/flower-pink.png",
+      "name": "분홍 꽃",
+      "category": "deco",
+      "pack": 2
+    },
+    {
+      "file": "deco/leaf-sprig.png",
+      "name": "잎사귀",
+      "category": "deco",
+      "pack": 2
+    },
+    {
+      "file": "deco/curved-arrow.png",
+      "name": "곡선 화살표",
+      "category": "deco",
+      "pack": 2
+    },
+    {
+      "file": "deco/wavy-underline.png",
+      "name": "물결 밑줄",
+      "category": "deco",
+      "pack": 2
+    },
+    {
+      "file": "deco/tape.png",
+      "name": "마스킹 테이프",
+      "category": "deco",
+      "pack": 2
     }
   ]
 }

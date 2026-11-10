@@ -1105,11 +1105,12 @@ test('빈 라이브러리는 바로 등록 버튼을 보여 주고, 스티커 �
   expect(errors).toEqual([])
 })
 
-test('기본 동물 스티커는 첫 실행에 한 번만 들어오고, 지운 스티커는 다시 시작해도 돌아오지 않는다', async () => {
+test('기본 스티커(동물·꾸미기)는 첫 실행에 한 번만 들어오고, 지운 스티커는 다시 시작해도 돌아오지 않는다', async () => {
   const pack = { PHOTOKKUMI_DEFAULT_STICKERS: resolve('resources/default-stickers') }
   await relaunch(pack)
   await expect(page.getByRole('button', { name: '고양이 정면 배치', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: '너구리 뒷모습 배치', exact: true })).toBeAttached()
+  await expect(page.getByRole('button', { name: '마스킹 테이프 배치', exact: true })).toBeAttached()
   await openManager(); await page.getByRole('button', { name: '고양이 정면 삭제', exact: true }).click()
   await page.getByRole('button', { name: '삭제 확인', exact: true }).click(); await closeManager()
   await expect(page.getByRole('button', { name: '고양이 정면 배치', exact: true })).toHaveCount(0)

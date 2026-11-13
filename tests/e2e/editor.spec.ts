@@ -1472,6 +1472,44 @@ test('썸네일: 템플릿·편집 중 사진 배경·제목 유지 템플릿 �
   expect(errors).toEqual([])
 })
 
+test('썸네일 배경: 사진을 더 열면 배경만 바뀌고, 빈 곳 Delete로 배경 사진 빼기·되돌리기, 목록 Delete·×로 사진 제거(되돌리기로 안 돌아옴)', async () => {
+  const second = join(directory, '두번째 배경.png')
+  await writeFile(second, makePng(64, 48, () => [200, 60, 30, 255]))
+  await select(source); await page.getByRole('button', { name: '사진 열기', exact: true }).click()
+  await page.getByRole('tab', { name: '썸네일 만들기' }).click()
+  await expect(page.getByRole('button', { name: '썸네일 저장' })).toBeEnabled()
+  await select(second); await page.getByRole('button', { name: '사진 넣기' }).click()
+  await page.getByRole('tab', { name: '배경' }).click()
+  const first = page.getByRole('button', { name: '배경 사진: 한글 사진.png' }), next = page.getByRole('button', { name: '배경 사진: 두번째 배경.png' })
+  await expect(next).toHaveAttribute('aria-pressed', 'true')
+  await expect(first).toHaveAttribute('aria-pressed', 'false')
+  const takeOut = page.getByRole('button', { name: '사진 빼기' })
+  // Nothing selected on the canvas: Delete takes the photo out of the background; undo puts it back.
+  const area = page.getByTestId('canvas-area'), box = (await area.boundingBox())!
+  await page.mouse.click(box.x + 6, box.y + 6)
+  await page.keyboard.press('Delete')
+  await expect(takeOut).toBeDisabled()
+  await expect(next).toHaveAttribute('aria-pressed', 'false')
+  await page.keyboard.press('Control+z')
+  await expect(next).toHaveAttribute('aria-pressed', 'true')
+  // Delete on a photo in the list removes it from the list; the background empties and undo cannot bring the removed photo back.
+  await next.focus(); await page.keyboard.press('Delete')
+  await expect(next).toHaveCount(0)
+  await expect(takeOut).toBeDisabled()
+  await expect(page.getByRole('status')).toContainText('두번째 배경.png을(를) 목록에서 제거했습니다')
+  await area.focus()
+  // Undo goes back to the first photo (still in the list), never to the removed one.
+  for (let i = 0; i < 3; i++) await page.keyboard.press('Control+z')
+  await expect(first).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  await page.getByRole('button', { name: '한글 사진.png 목록에서 제거' }).click()
+  await expect(first).toHaveCount(0)
+  await expect(takeOut).toBeDisabled()
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '썸네일 저장' })).toBeEnabled()
+  expect(errors).toEqual([])
+})
+
 function findFfmpeg() {
   const { spawnSync } = process.getBuiltinModule('node:child_process') as typeof import('node:child_process')
   for (const candidate of [process.env.FFMPEG_PATH, 'ffmpeg', '/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg'].filter(Boolean) as string[]) {

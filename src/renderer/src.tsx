@@ -437,7 +437,14 @@ function App() {
     }
     const current = currentHistory.current.present
     const selected = [...current.stickers, ...current.regions, ...current.shapes, ...current.texts].find(item => item.id === current.selectedId)
-    if (!selected) return
+    if (!selected) {
+      // Nothing selected on the thumbnail: Delete takes the photo out of the background (undoable).
+      if (mode === 'thumb' && (event.key === 'Delete' || event.key === 'Backspace') && current.background?.photoId && !event.repeat
+        && !(target instanceof HTMLElement && target.closest('aside'))) {
+        event.preventDefault(); changeBackground({ photoId: null, hidePhoto: undefined }); setStatus('배경 사진을 뺐습니다. Ctrl+Z로 되돌릴 수 있습니다.')
+      }
+      return
+    }
     if (event.key === 'Delete' || event.key === 'Backspace') {
       event.preventDefault()
       if (!event.repeat) editScene(removeSelected(current))
@@ -526,6 +533,14 @@ function App() {
       activeId.current = null
       const next = emptyHistory()
       currentHistory.current = next; setHistory(next); setPhoto(null); setDirty(false)
+    }
+    // The thumbnail must not keep (or be able to undo back to) a photo that left the list.
+    const thumb = sessions.current.get(THUMB)
+    const scrub = (item: Scene) => item.background?.photoId === id ? { ...item, background: { ...item.background, photoId: null, hidePhoto: undefined } } : item
+    if (thumb && [thumb.history.present, ...thumb.history.past, ...thumb.history.future].some(item => item.background?.photoId === id)) {
+      const scrubbed = { present: scrub(thumb.history.present), past: thumb.history.past.map(scrub), future: thumb.history.future.map(scrub) }
+      if (activeId.current === THUMB) applyHistory(scrubbed)
+      else sessions.current.set(THUMB, editPhotoSession(thumb, scrubbed))
     }
     setPhotos(result.value)
     setStatus(`${target.name}을(를) 목록에서 제거했습니다. 원본 파일은 그대로입니다.`)
@@ -998,7 +1013,7 @@ function App() {
         {thumbTab === 'template' ? <TemplateGallery filter={templateFilter} onFilter={setTemplateFilter} theme={scene.theme} current={scene.template} photo={thumbPhoto && scene.background?.photoId ? thumbPhoto : null}
           busy={busy} mine={myTemplates} maxMine={MAX_MY_TEMPLATES} onApply={template => void applyThumbTemplate(template)} onTheme={chooseTheme}
           onSaveMine={() => void saveMyTemplate()} onApplyMine={template => void applyMyTemplate(template)} onDeleteMine={id => storeMyTemplates(myTemplates.filter(item => item.id !== id))} />
-        : thumbTab === 'background' ? <BackgroundPanel background={scene.background ?? DEFAULT_BACKGROUND} photos={photos} busy={busy} onChange={changeBackground} onCommit={commitLive} onOpenPhoto={() => void openThumbPhoto()} />
+        : thumbTab === 'background' ? <BackgroundPanel background={scene.background ?? DEFAULT_BACKGROUND} photos={photos} busy={busy} onChange={changeBackground} onCommit={commitLive} onOpenPhoto={() => void openThumbPhoto()} onRemovePhoto={removePhoto} />
         : thumbTab === 'text' ? textPanel
         : <>
           <ShapePanel shape={shapeItem} count={scene.shapes.length} busy={busy} onAdd={addShapeItem} onStyle={changeShapeStyle} onCommit={commitLive}>{shapeItem ? numericFields : null}</ShapePanel>

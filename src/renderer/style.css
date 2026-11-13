@@ -348,9 +348,10 @@ dialog.library-dialog { width: min(860px, 92vw); max-width: 92vw; max-height: 86
 .my-template { position: relative; min-width: 0; }
 .my-template .remove { position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; padding: 0; border-radius: 50%; font-size: 12px; line-height: 1; display: none; place-items: center; background: var(--surface); }
 .my-template:hover .remove, .my-template:focus-within .remove { display: grid; }
-.thumb-photos { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; max-height: 128px; overflow-y: auto; scrollbar-width: thin; }
-.thumb-photos button { width: 100%; height: auto; aspect-ratio: 4 / 3; padding: 0; overflow: hidden; border-color: var(--line); }
-.thumb-photos button img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.thumb-photos { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 3px 3px 0 0; max-height: 128px; overflow-y: auto; scrollbar-width: thin; }
+.thumb-photos .photo-cell { min-width: 0; }
+.thumb-photos button.photo-pick, .thumb-photos .add-photo { width: 100%; height: auto; aspect-ratio: 4 / 3; padding: 0; overflow: hidden; border-color: var(--line); }
+.thumb-photos .photo-pick img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .thumb-photos button[aria-pressed=true] { outline: 2px solid var(--accent); outline-offset: 1px; }
 .thumb-photos .add-photo { grid-column: span 2; aspect-ratio: auto; height: 100%; min-height: 42px; border-style: dashed; color: var(--accent); font-size: 12px; font-weight: 600; background: var(--surface); }
 .thumb-panel .text-fields label .hint { flex: none; margin-left: 6px; }

@@ -92,8 +92,10 @@ interface BackgroundProps {
   onChange(patch: Partial<ThumbBackground>, live?: boolean): void
   onCommit(): void
   onOpenPhoto(): void
+  /** Takes the photo out of the photo list (the original file stays). */
+  onRemovePhoto(id: string): void
 }
-export function BackgroundPanel({ background, photos, busy, onChange, onCommit, onOpenPhoto }: BackgroundProps) {
+export function BackgroundPanel({ background, photos, busy, onChange, onCommit, onOpenPhoto, onRemovePhoto }: BackgroundProps) {
   const hasPhoto = !!background.photoId, shown = hasPhoto && !background.hidePhoto
   const slider = (key: 'zoom' | 'focusX' | 'focusY' | 'dim', label: string, min: number, max: number, unit: string) => <label key={key}>{label}
     <input type="range" aria-label={label} min={min} max={max} step="1" disabled={busy || !shown} value={background[key]}
@@ -105,8 +107,12 @@ export function BackgroundPanel({ background, photos, busy, onChange, onCommit, 
     <div className="pane-heading"><h2>사진</h2><button className="link" disabled={busy || !hasPhoto} onClick={() => onChange({ photoId: null })}>사진 빼기</button></div>
     <div className="thumb-photos" role="group" aria-label="배경 사진 고르기">
       <button className="add-photo" disabled={busy} onClick={onOpenPhoto} title="사진 파일을 골라 배경에 넣습니다">＋ 사진 열기</button>
-      {photos.map(item => <button key={item.id} className="photo-pick" disabled={busy} aria-pressed={background.photoId === item.id} aria-label={`배경 사진: ${item.name}`} title={item.name}
-        onClick={() => onChange({ photoId: item.id, zoom: 100, focusX: 50, focusY: 50, hidePhoto: undefined })}><img src={item.thumbnail} alt="" /></button>)}
+      {photos.map(item => <div key={item.id} className="photo-cell">
+        <button className="photo-pick" disabled={busy} aria-pressed={background.photoId === item.id} aria-label={`배경 사진: ${item.name}`} title={`${item.name} · Delete 키로 목록에서 제거`}
+          onClick={() => onChange({ photoId: item.id, zoom: 100, focusX: 50, focusY: 50, hidePhoto: undefined })}
+          onKeyDown={event => { if ((event.key === 'Delete' || event.key === 'Backspace') && !event.repeat) { event.preventDefault(); event.stopPropagation(); onRemovePhoto(item.id) } }}><img src={item.thumbnail} alt="" /></button>
+        <button className="photo-remove" disabled={busy} aria-label={`${item.name} 목록에서 제거`} title="목록에서 제거 (원본 파일은 유지)" onClick={() => onRemovePhoto(item.id)}>×</button>
+      </div>)}
     </div>
     {hasPhoto && background.hidePhoto && <label className="check show-photo"><input type="checkbox" checked={false} disabled={busy} onChange={() => onChange({ hidePhoto: undefined })} />사진 보이기 <span className="hint">카드뉴스 템플릿은 사진을 숨깁니다</span></label>}
     <div className="region-fields text-fields" role="group" aria-label="사진 위치">
@@ -116,7 +122,7 @@ export function BackgroundPanel({ background, photos, busy, onChange, onCommit, 
       {slider('dim', '어둡게', 0, 90, '%')}
       <label>배경색<ColorField label="배경색" value={background.color} disabled={busy} onLive={color => onChange({ color }, true)} onCommit={onCommit} /><span className="hint">사진이 없을 때·사진 아래</span></label>
     </div>
-    <p className="hint">{hasPhoto ? '사진은 정사각형에 꽉 차게 들어갑니다. 확대한 뒤 좌우·위아래 위치로 보일 부분을 고르세요. 슬라이더를 두 번 누르면 처음 값으로 돌아갑니다.' : '사진 편집에서 연 사진을 누르거나 사진 열기로 배경 사진을 넣으세요. 사진을 이 창에 끌어 놓아도 됩니다.'}</p>
+    <p className="hint">{hasPhoto ? '배경은 고른 사진 한 장입니다. 목록의 ×(또는 Delete)는 목록에서 빼고, 사진 빼기는 배경만 비웁니다. 확대한 뒤 좌우·위아래 위치로 보일 부분을 고르세요.' : '사진 편집에서 연 사진을 누르거나 사진 열기로 배경 사진을 넣으세요. 사진을 이 창에 끌어 놓아도 됩니다.'}</p>
   </section>
 }
 

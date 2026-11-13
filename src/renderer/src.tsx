@@ -900,9 +900,9 @@ function App() {
     <header className="toolbar">
       <h1>포토꾸미</h1>
       <div className="mode-tabs" role="tablist" aria-label="작업 모드">
-        <button role="tab" aria-selected={mode === 'photo'} disabled={gifBusy} onClick={() => switchMode('photo')}>사진 편집</button>
-        <button role="tab" aria-selected={mode === 'thumb'} disabled={busy || gifBusy} aria-label="썸네일 만들기" onClick={() => switchMode('thumb')}><span className="label">썸네일 만들기</span><span className="label-short">썸네일</span></button>
-        <button role="tab" aria-selected={mode === 'gif'} disabled={busy} onClick={() => switchMode('gif')}>GIF 만들기</button>
+        <button role="tab" aria-selected={mode === 'photo'} disabled={gifBusy} onClick={() => switchMode('photo')}><span className="label">사진 편집</span><span className="label-short">사진</span></button>
+        <button role="tab" aria-selected={mode === 'thumb'} disabled={busy || gifBusy} onClick={() => switchMode('thumb')}><span className="label">썸네일 만들기</span><span className="label-short">썸네일</span></button>
+        <button role="tab" aria-selected={mode === 'gif'} disabled={busy} onClick={() => switchMode('gif')}><span className="label">GIF 만들기</span><span className="label-short">GIF</span></button>
       </div>
       <div className="photo-tools" hidden={mode !== 'thumb'}>
         <nav aria-label="썸네일 사진" className="toolbar-group">

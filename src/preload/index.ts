@@ -62,6 +62,7 @@ const api: PhotoApi = {
   getOutputFolder: () => ipcRenderer.invoke('output:current'),
   getOutputSettings: () => ipcRenderer.invoke('output:get'),
   updateOutputSettings: output => ipcRenderer.invoke('output:update', output),
-  saveImage: (request) => ipcRenderer.invoke('photo:save', request)
+  saveImage: (request) => ipcRenderer.invoke('photo:save', request),
+  saveThumbnail: request => ipcRenderer.invoke('thumb:save', request)
 }
 contextBridge.exposeInMainWorld('photokkumi', api)

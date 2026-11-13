@@ -10,13 +10,17 @@ import type { VideoRef } from '../shared/gif'
 import type { UpdateState } from '../shared/update'
 import { loadPref, savePref } from './remember'
 import { TextPanel } from './TextPanel'
-import { ensureFont, listSystemFonts, withMeasuredSize } from './text'
+import { BackgroundPanel, ShapePanel, TemplateGallery, validMyTemplates, MAX_MY_TEMPLATES, type MyTemplate, type ShapePreset, type TemplateFilter } from './ThumbPanel'
+import { drawLayout, layoutTemplate, renderBackground, type ThumbLayout } from './thumb'
+import { THUMB_TEMPLATES, templateById, templateColors, type ThumbTemplate } from '../shared/thumb-templates'
+import { DEFAULT_BACKGROUND, SHAPE_STYLE_KEYS, THUMB_SESSION_ID, THUMB_SIZE, palette, validBackground, type ShapeItem, type ShapeStyle, type ThumbBackground } from '../shared/shapes'
+import { ensureFont, ensureTextFonts, listSystemFonts, withMeasuredSize } from './text'
 import { DEFAULT_TEXT, DEFAULT_TEXT_STYLE, MAX_MY_PRESETS, MAX_TEXTS, samePreset, validFontSize, validMyPresets, validRelSize, validTextStyle, type MyPreset, type TextItem, type TextStyle } from '../shared/text'
 const validRegionEffect = (value: unknown): value is { style: 'blur' | 'mosaic'; strength: number; shape: 'ellipse' | 'rect' } => {
   const v = value as Record<string, unknown> | null
   return !!v && typeof v === 'object' && ['blur', 'mosaic'].includes(v.style as string) && typeof v.strength === 'number' && validStrength(v.strength) && ['ellipse', 'rect'].includes(v.shape as string)
 }
-import { addInstance, addRegion, addText, clearRegions, clearTexts, updateSelectedText, setAdjustments, updateSelectedRegion, validStrength, updateSelected, removeSelected, duplicateSelected, reorderSelected, emptyHistory, commitScene, undoScene, redoScene, MAX_INSTANCES, MAX_DECODED_STICKER_PIXELS, type Scene, type SceneHistory } from '../shared/scene'
+import { addInstance, addRegion, addShape, addText, applyLayout, applyTheme, setBackground, updateSelectedShape, clearRegions, clearTexts, updateSelectedText, setAdjustments, updateSelectedRegion, validStrength, updateSelected, removeSelected, duplicateSelected, reorderSelected, emptyHistory, commitScene, undoScene, redoScene, MAX_INSTANCES, MAX_DECODED_STICKER_PIXELS, type Scene, type SceneHistory } from '../shared/scene'
 import { createPhotoSession, editPhotoSession, savePhotoSession, discardPhotoSession, sessionAssets, type PhotoSession } from '../shared/photo-session'
 import { DEFAULT_OUTPUT, validOutput, outputSize, outputKey, type OutputSettings } from '../shared/output'
 import { composePng } from './export'
@@ -27,13 +31,15 @@ const validTextDefaults = (value: unknown): value is { style: TextStyle; relSize
   return !!v && typeof v === 'object' && validTextStyle(v.style) && validRelSize(v.relSize)
 }
 /** Which side tab edits the selected item. */
-function selectedKind(scene: Scene): 'stickers' | 'regions' | 'text' | null {
+function selectedKind(scene: Scene): 'stickers' | 'regions' | 'text' | 'shapes' | null {
   const id = scene.selectedId
   if (!id) return null
-  return scene.texts.some(item => item.id === id) ? 'text' : scene.regions.some(item => item.id === id) ? 'regions' : scene.stickers.some(item => item.id === id) ? 'stickers' : null
+  return scene.texts.some(item => item.id === id) ? 'text' : scene.shapes.some(item => item.id === id) ? 'shapes' : scene.regions.some(item => item.id === id) ? 'regions' : scene.stickers.some(item => item.id === id) ? 'stickers' : null
 }
 
 declare global { interface Window { photokkumi: PhotoApi } }
+const THUMB = THUMB_SESSION_ID
+const blobUrl = (blob: Blob) => new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result as string); reader.onerror = () => reject(new Error('미리보기를 만들 수 없습니다.')); reader.readAsDataURL(blob) })
 interface DecodedAsset extends Omit<ImageAsset, 'bytes'> { bitmap: ImageBitmap }
 async function decode(asset: ImageAsset): Promise<DecodedAsset> {
   const bitmap = await createImageBitmap(new Blob([new Uint8Array(asset.bytes)], { type: asset.mime }), { imageOrientation: 'from-image' })
@@ -70,7 +76,10 @@ function App() {
   const activeId = useRef<string | null>(null)
   const [pendingPhoto, setPendingPhoto] = useState<string | null>(null)
   const switchDialog = useRef<HTMLDialogElement>(null)
-  const [photo, setPhoto] = useState<DecodedAsset | null>(null)
+  const [photo, setPhotoState] = useState<DecodedAsset | null>(null)
+  // The shown photo also in a ref: a save right after switching back from the thumbnail must not see the old render's value.
+  const livePhoto = useRef<DecodedAsset | null>(null)
+  const setPhoto = (next: DecodedAsset | null) => { livePhoto.current = next; setPhotoState(next) }
   const [history, setHistory] = useState<SceneHistory>(emptyHistory)
   const currentHistory = useRef(history)
   const assets = useRef(new Map<string, DecodedAsset>())
@@ -78,7 +87,8 @@ function App() {
   const placement = scene.stickers.find(item => item.id === scene.selectedId) ?? null
   const region = scene.regions.find(item => item.id === scene.selectedId) ?? null
   const textItem = scene.texts.find(item => item.id === scene.selectedId) ?? null
-  const selection: Placement | null = placement ?? region ?? textItem
+  const shapeItem = scene.shapes.find(item => item.id === scene.selectedId) ?? null
+  const selection: Placement | null = placement ?? region ?? textItem ?? shapeItem
   type RegionEffect = { style: RegionStyle; strength: number; shape: RegionShape }
   const [regionDefaults, setRegionDefaults] = useState<RegionEffect>(() => loadPref('pk.regionDefaults', { style: 'blur', strength: 50, shape: 'ellipse' }, validRegionEffect))
   const liveBase = useRef<Scene | null>(null)
@@ -92,8 +102,19 @@ function App() {
   function storeMyPresets(next: MyPreset[]) { setMyPresets(next); savePref('pk.textPresets', next) }
   const textArea = useRef<HTMLTextAreaElement>(null)
   const focusNewText = useRef(false)
-  useEffect(() => { if (sideTab === 'text' && systemFonts === null) void listSystemFonts().then(setSystemFonts) }, [sideTab, systemFonts])
-  const [mode, setMode] = useState<'photo' | 'gif'>('photo')
+  const [mode, setMode] = useState<'photo' | 'gif' | 'thumb'>('photo')
+  type ThumbTab = 'template' | 'background' | 'text' | 'deco'
+  const [thumbTab, setThumbTab] = useState<ThumbTab>('template')
+  const [templateFilter, setTemplateFilter] = useState<TemplateFilter>('all')
+  const [thumbFormat, setThumbFormat] = useState<'jpg' | 'png'>(() => loadPref('pk.thumbFormat', 'jpg', (value): value is 'jpg' | 'png' => value === 'jpg' || value === 'png'))
+  const [myTemplates, setMyTemplates] = useState<MyTemplate[]>(() => loadPref('pk.thumbTemplates', [], validMyTemplates))
+  /** The photo the editor showed before the thumbnail tab opened; it comes back on return. */
+  const photoModeId = useRef<string | null>(null)
+  /** Decoded background photo of the thumbnail (full size, cover-cropped when drawn). */
+  const thumbSource = useRef<{ id: string; bitmap: ImageBitmap } | null>(null)
+  const [thumbPhoto, setThumbPhoto] = useState<ImageBitmap | null>(null)
+  const textTabOpen = mode === 'thumb' ? thumbTab === 'text' : sideTab === 'text'
+  useEffect(() => { if (textTabOpen && systemFonts === null) void listSystemFonts().then(setSystemFonts) }, [textTabOpen, systemFonts])
   // The region tab is the blur/mosaic tool: it stays on until another tab, Esc or the toolbar button.
   const drawMode = sideTab === 'regions' && mode === 'photo' && !!photo
   const [incomingVideo, setIncomingVideo] = useState<{ ref: VideoRef; nonce: number } | null>(null)
@@ -117,6 +138,8 @@ function App() {
   const [error, setError] = useState('')
   const [libraryItems, setLibraryItems] = useState<LibrarySticker[]>([])
   const [dirty, setDirty] = useState(false)
+  // Edits can wait in both the thumbnail and the editor's photo (switching tabs does not ask to save).
+  const anyDirty = dirty || [...sessions.current.values()].some(session => session.dirty)
   const [closeRequest, setCloseRequest] = useState<string | null>(null)
   const closeDialog = useRef<HTMLDialogElement>(null)
   useEffect(() => window.photokkumi.onCloseRequested(setCloseRequest), [])
@@ -124,10 +147,10 @@ function App() {
     if (!closeRequest || busy) return
     switchDialog.current?.close(); setPendingPhoto(null)
     libraryDialog.current?.close(); setLibraryOpen(false)
-    if (!dirty) {
+    if (!anyDirty) {
       void resolveClose('close').catch(value => setError(String(value)))
     } else if (!closeDialog.current?.open) closeDialog.current?.showModal()
-  }, [closeRequest, busy, dirty])
+  }, [closeRequest, busy, anyDirty])
   useEffect(() => {
     if (!settingsOpen) return
     const close = (event: PointerEvent) => { if (!settingsAnchor.current?.contains(event.target as Node)) setSettingsOpen(false) }
@@ -137,6 +160,7 @@ function App() {
   useEffect(() => { if (libraryOpen && !libraryDialog.current?.open) libraryDialog.current?.showModal() }, [libraryOpen])
   const closeLibrary = () => { if (!operation.current) { libraryDialog.current?.close(); setLibraryOpen(false) } }
   useEffect(() => () => photo?.bitmap.close(), [photo])
+  useEffect(() => () => thumbSource.current?.bitmap.close(), [])
   useEffect(() => {
     const keep = new Set([...sessions.current.values()].flatMap(sessionAssets))
     for (const [id, asset] of assets.current) if (!keep.has(id)) { asset.bitmap.close(); assets.current.delete(id) }
@@ -221,6 +245,7 @@ function App() {
   function selectFromCanvas(id: string | null) {
     selectInstance(id)
     const current = currentHistory.current.present
+    if (mode === 'thumb') { if (id) setThumbTab(current.texts.some(item => item.id === id) ? 'text' : 'deco'); return }
     if (!id || sideTab === 'adjust') return
     if (current.texts.some(item => item.id === id)) setSideTab('text')
     else if (current.stickers.some(item => item.id === id)) setSideTab('stickers')
@@ -238,7 +263,7 @@ function App() {
     const offset = (current.texts.length % 4) * fontSize * 1.6
     const measured = withMeasuredSize({ text: DEFAULT_TEXT, fontSize, style: { ...textDefaults.style } })
     editScene(addText(currentHistory.current.present, { id: crypto.randomUUID(), ...measured, x: photo.width / 2, y: Math.min(photo.height, photo.height / 2 + offset), rotation: 0 }))
-    setSideTab('text')
+    if (mode === 'thumb') setThumbTab('text'); else setSideTab('text')
     setStatus('글자를 추가했습니다. 오른쪽 입력칸에 내용을 쓰고, 사진 위에서 옮기거나 모서리로 크기를 바꾸세요.')
     focusNewText.current = true
   })
@@ -393,12 +418,12 @@ function App() {
   }
   function handleEditorKey(event: KeyboardEvent<HTMLElement>) {
     const target = event.target
-    if (mode !== 'photo') return
+    if (mode === 'gif') return
     if (event.defaultPrevented || event.nativeEvent.isComposing || event.altKey
       || operation.current || closeRequest || pendingPhoto || libraryOpen || (target instanceof HTMLElement
         && (target.isContentEditable || target.closest('input, textarea, select, dialog, [role="textbox"]')))) return
     if (event.key === 'Escape' && drawMode) { event.preventDefault(); openTab('stickers'); return }
-    if (photo && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.key.toLowerCase() === 'b' && !event.repeat) { event.preventDefault(); openTab(sideTab === 'regions' ? 'stickers' : 'regions'); return }
+    if (photo && mode === 'photo' && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.key.toLowerCase() === 'b' && !event.repeat) { event.preventDefault(); openTab(sideTab === 'regions' ? 'stickers' : 'regions'); return }
     if (photo && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.key.toLowerCase() === 't' && !event.repeat && !drawMode) { event.preventDefault(); void addTextItem(); return }
     if (event.ctrlKey || event.metaKey) {
       const key = event.key.toLowerCase()
@@ -411,7 +436,7 @@ function App() {
       return
     }
     const current = currentHistory.current.present
-    const selected = [...current.stickers, ...current.regions, ...current.texts].find(item => item.id === current.selectedId)
+    const selected = [...current.stickers, ...current.regions, ...current.shapes, ...current.texts].find(item => item.id === current.selectedId)
     if (!selected) return
     if (event.key === 'Delete' || event.key === 'Backspace') {
       event.preventDefault()
@@ -473,11 +498,16 @@ function App() {
     const result = await window.photokkumi.importDroppedFiles(files)
     if (!result.ok) throw new Error(result.error)
     const { photos: imported, rejected, videos } = result.value
-    const before = photos.length
+    const before = new Set(photos.map(item => item.id))
     await acceptBatch(imported, rejected)
-    // A dropped video opens the GIF maker; photos-only drops bring the editor forward.
+    // A dropped video opens the GIF maker; a photo dropped on the thumbnail becomes its background; other photo drops bring the editor forward.
+    const added = imported.find(item => !before.has(item.id))
     if (videos[0]) { setMode('gif'); setIncomingVideo({ ref: videos[0], nonce: Date.now() }) }
-    else if (imported.length !== before || !rejected.length) setMode('photo')
+    else if (mode === 'thumb') { if (added) changeBackground({ photoId: added.id, zoom: 100, focusX: 50, focusY: 50, hidePhoto: undefined }) }
+    else if (added || !rejected.length) {
+      if (activeId.current === THUMB) await restorePhotoSession()
+      setMode('photo')
+    }
   })
   const removePhoto = (id: string) => run(async () => {
     const index = photos.findIndex(item => item.id === id)
@@ -491,6 +521,7 @@ function App() {
     const result = await window.photokkumi.removePhoto(id)
     if (!result.ok) throw new Error(result.error)
     sessions.current.delete(id)
+    if (photoModeId.current === id) photoModeId.current = null
     if (activeId.current === id) {
       activeId.current = null
       const next = emptyHistory()
@@ -521,7 +552,8 @@ function App() {
     try { return await writeCurrent() } catch (error) { setStatus(''); throw error }
   }
   async function writeCurrent(): Promise<boolean> {
-    if (!photo) return false
+    const photo = livePhoto.current
+    if (!photo || photo.id === THUMB) return false
     if (!outputLoaded) throw new Error('출력 설정을 불러온 뒤 저장할 수 있습니다.')
     outputSize(photo.width, photo.height, output)
     // Typing or a slider drag still in progress becomes its undo step now, not after the save marks the photo clean.
@@ -571,15 +603,193 @@ function App() {
     setCloseRequest(current => current === requestId ? null : current)
   }
   const cancelClose = () => { void resolveClose('cancel').catch(value => setError(String(value))) }
+  /** Close dialog "저장": the thumbnail and the editor's photo, whichever has unsaved edits. */
+  async function saveAllDirty(): Promise<boolean> {
+    if (sessions.current.get(THUMB)?.dirty && !await saveThumbCurrent()) return false
+    const photoId = activeId.current === THUMB ? photoModeId.current : activeId.current
+    if (!photoId || !sessions.current.get(photoId)?.dirty) return true
+    if (activeId.current === THUMB) { await restorePhotoSession(); setMode('photo') }
+    return saveCurrent()
+  }
   const saveAndClose = () => run(async () => {
     try {
-      if (await saveCurrent()) await resolveClose('close')
+      if (await saveAllDirty()) await resolveClose('close')
       else await resolveClose('cancel')
     } catch (error) {
       await resolveClose('cancel')
       throw error
     }
   })
+  // ---- 썸네일 만들기 ----
+  async function thumbPhotoSource(id: string | null): Promise<ImageBitmap | null> {
+    if (!id) return null
+    if (thumbSource.current?.id === id) return thumbSource.current.bitmap
+    const result = await window.photokkumi.readPhoto(id)
+    if (!result.ok) throw new Error(result.error)
+    const decoded = await decode(result.value)
+    if (thumbSource.current?.id === id) { decoded.bitmap.close(); return thumbSource.current.bitmap }
+    const old = thumbSource.current
+    thumbSource.current = { id, bitmap: decoded.bitmap }
+    setThumbPhoto(decoded.bitmap)
+    // Previews still drawing the old photo finish first.
+    if (old) setTimeout(() => old.bitmap.close(), 1000)
+    return decoded.bitmap
+  }
+  // The background (color, cover-cropped photo, dim) is the thumbnail's "photo": the canvas and the export draw everything else on it.
+  const background = mode === 'thumb' ? scene.background : undefined
+  useEffect(() => {
+    if (!background || activeId.current !== THUMB) return
+    let alive = true
+    void thumbPhotoSource(background.photoId).catch(value => { if (alive) setError(value instanceof Error ? value.message : '배경 사진을 읽을 수 없습니다.'); return null }).then(source => {
+      if (!alive) return
+      setPhoto({ id: THUMB, name: '썸네일', width: THUMB_SIZE, height: THUMB_SIZE, mime: 'image/png', bitmap: renderBackground(background, source) })
+    })
+    return () => { alive = false }
+    // thumbPhotoSource only reads refs and state setters.
+  }, [background])
+  async function openThumbSession() {
+    if (activeId.current && activeId.current !== THUMB) photoModeId.current = activeId.current
+    let session = sessions.current.get(THUMB)
+    if (!session) {
+      // The first thumbnail starts from the first template, with the photo open in the editor as its background.
+      const layout = await layoutTemplate(THUMB_TEMPLATES[0], undefined, { ...DEFAULT_BACKGROUND, photoId: photoModeId.current }, [])
+      const created = createPhotoSession(), present = applyLayout(created.history.present, layout)
+      session = { ...created, history: { present, past: [], future: [] }, checkpoint: present }
+      sessions.current.set(THUMB, session)
+    }
+    activeId.current = THUMB
+    currentHistory.current = session.history; setHistory(session.history); liveBase.current = null
+    setPhoto(null); setDirty(session.dirty)
+    setStatus('템플릿을 고르고, 사진을 넣고, 글자를 눌러 바꾸세요. 1080×1080으로 저장합니다.')
+  }
+  async function restorePhotoSession() {
+    activeId.current = null
+    const id = photoModeId.current && sessions.current.has(photoModeId.current) ? photoModeId.current : photos[0]?.id
+    setPhoto(null)
+    if (id) { await activatePhoto(id); return }
+    const next = emptyHistory()
+    currentHistory.current = next; setHistory(next); setDirty(false); setStatus('사진을 열어 시작하세요.')
+  }
+  const switchMode = (next: 'photo' | 'gif' | 'thumb') => {
+    if (next === mode) return
+    setSettingsOpen(false)
+    if (next === 'gif' || (next === 'photo' && activeId.current !== THUMB)) { commitLive(); setMode(next); return }
+    void run(async () => {
+      commitLive()
+      if (next === 'thumb') await openThumbSession(); else await restorePhotoSession()
+      setMode(next)
+    })
+  }
+  function changeBackground(patch: Partial<ThumbBackground>, live = false) {
+    const current = currentHistory.current.present
+    if (!current.background) return
+    const next = { ...current.background, ...patch }
+    if (!validBackground(next)) return
+    const scene = setBackground(current, next)
+    if (live) liveEdit(scene); else editScene(scene)
+  }
+  const openThumbPhoto = () => run(async () => {
+    const before = new Set(photos.map(item => item.id))
+    const result = await window.photokkumi.choosePhotos()
+    if (!result.ok) throw new Error(result.error)
+    if (!result.value) return
+    await acceptBatch(result.value, [])
+    const added = result.value.find(item => !before.has(item.id))
+    if (added) { changeBackground({ photoId: added.id, zoom: 100, focusX: 50, focusY: 50, hidePhoto: undefined }); setStatus(`${added.name}을(를) 배경에 넣었습니다. 배경 탭에서 확대·위치·어둡게를 조절하세요.`) }
+    else setStatus('이미 열린 사진입니다. 배경 탭의 사진 목록에서 고르세요.')
+  })
+  const applyThumbTemplate = (template: ThumbTemplate) => run(async () => {
+    commitLive()
+    const current = currentHistory.current.present
+    const layout = await layoutTemplate(template, current.theme, current.background ?? DEFAULT_BACKGROUND, current.texts)
+    editScene(applyLayout(currentHistory.current.present, layout))
+    setStatus(`'${template.name}' 템플릿을 적용했습니다. 글자를 눌러 내용을 바꾸세요. 실행 취소(Ctrl+Z)로 되돌릴 수 있습니다.`)
+  })
+  function chooseTheme(id: string | undefined) {
+    commitLive()
+    const current = currentHistory.current.present
+    if (current.theme === id) return
+    const template = templateById(current.template)
+    const colors = id ? palette(id) : template ? templateColors(template, undefined) : undefined
+    editScene({ ...(colors ? applyTheme(current, colors) : current), theme: id })
+  }
+  function addShapeItem(preset: ShapePreset) {
+    const current = currentHistory.current.present
+    const accent = (palette(current.theme) ?? templateColors(templateById(current.template) ?? THUMB_TEMPLATES[0], undefined)).accent
+    const offset = (current.shapes.length % 5) * 24
+    const base: ShapeItem = { id: crypto.randomUUID(), kind: 'rect', x: 540 + offset, y: 540 + offset, width: 420, height: 300, rotation: 0,
+      fill: accent, fillOpacity: 100, stroke: '#ffffff', strokeWidth: 0, radius: 0, shadow: false }
+    const shape: ShapeItem = preset === 'round' ? { ...base, radius: 15 } : preset === 'ellipse' ? { ...base, kind: 'ellipse', width: 360, height: 360 }
+      : preset === 'frame' ? { ...base, width: 640, height: 640, fillOpacity: 0, strokeWidth: 10 } : preset === 'line' ? { ...base, width: 400, height: 8, fill: '#ffffff' } : base
+    try { editScene(addShape(current, shape)); setThumbTab('deco') }
+    catch (value) { setError(value instanceof Error ? value.message : '도형을 넣을 수 없습니다.') }
+  }
+  function changeShapeStyle(patch: Partial<ShapeStyle>, live = false) {
+    const current = currentHistory.current.present
+    const shape = current.shapes.find(item => item.id === current.selectedId)
+    if (!shape) return
+    const style = { ...Object.fromEntries(SHAPE_STYLE_KEYS.map(key => [key, shape[key]])), ...patch } as ShapeStyle
+    try { const next = updateSelectedShape(current, style); if (live) liveEdit(next); else editScene(next) } catch { /* out-of-range input: keep the shape */ }
+  }
+  function storeMyTemplates(next: MyTemplate[]): boolean {
+    try { localStorage.setItem('pk.thumbTemplates', JSON.stringify(next)) }
+    catch { setError('내 템플릿을 저장할 공간이 부족합니다. 쓰지 않는 내 템플릿을 지운 뒤 다시 저장하세요.'); return false }
+    setMyTemplates(next); return true
+  }
+  const saveMyTemplate = () => run(async () => {
+    commitLive()
+    const current = currentHistory.current.present
+    if (!current.background || myTemplates.length >= MAX_MY_TEMPLATES) return
+    const layout: ThumbLayout = { background: { ...current.background, photoId: null }, shapes: current.shapes, texts: current.texts, template: current.template }
+    await ensureTextFonts(current.texts)
+    const canvas = new OffscreenCanvas(208, 208), context = canvas.getContext('2d')
+    if (!context) throw new Error('미리보기를 만들 수 없습니다.')
+    drawLayout(context, layout, await thumbPhotoSource(current.background.photoId).catch(() => null), 208)
+    const preview = await blobUrl(await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.82 }))
+    const number = Math.max(0, ...myTemplates.map(item => Number(/^내 템플릿 (\d+)$/.exec(item.name)?.[1] ?? 0))) + 1
+    const name = `내 템플릿 ${number}`
+    if (storeMyTemplates([{ id: crypto.randomUUID(), name, layout, theme: current.theme, preview }, ...myTemplates])) {
+      setTemplateFilter('mine'); setThumbTab('template')
+      setStatus(`${name}에 지금 배치·글자·색을 저장했습니다. 사진과 스티커는 저장하지 않습니다.`)
+    }
+  })
+  const applyMyTemplate = (template: MyTemplate) => run(async () => {
+    commitLive()
+    const current = currentHistory.current.present, keep = current.background ?? DEFAULT_BACKGROUND
+    await ensureTextFonts(template.layout.texts)
+    const fresh = <T extends { id: string }>(item: T): T => ({ ...item, id: crypto.randomUUID() })
+    const layout = { ...template.layout, background: { ...template.layout.background, photoId: keep.photoId, zoom: keep.zoom, focusX: keep.focusX, focusY: keep.focusY },
+      shapes: template.layout.shapes.map(fresh), texts: template.layout.texts.map(fresh) }
+    editScene({ ...applyLayout(currentHistory.current.present, layout), theme: template.theme })
+    setStatus(`${template.name}을(를) 적용했습니다.`)
+  })
+  async function saveThumbCurrent(): Promise<boolean> {
+    try { return await writeThumb() } catch (error) { setStatus(''); throw error }
+  }
+  async function writeThumb(): Promise<boolean> {
+    if (activeId.current === THUMB) commitLive()
+    const session = sessions.current.get(THUMB)
+    if (!session) return false
+    const present = session.history.present, back = present.background ?? DEFAULT_BACKGROUND
+    setStatus('저장 중…')
+    const base = renderBackground(back, await thumbPhotoSource(back.photoId))
+    let png: Uint8Array
+    try { png = await composePng(base, present.stickers, assets.current, { ...DEFAULT_OUTPUT, format: thumbFormat }, [], NEUTRAL_ADJUSTMENTS, present.texts, present.shapes) }
+    finally { base.close() }
+    // Named after the background photo while it is still in the photo list.
+    const photoId = back.photoId && photos.some(item => item.id === back.photoId) ? back.photoId : null
+    const result = await window.photokkumi.saveThumbnail({ photoId, png, format: thumbFormat })
+    if (!result.ok) throw new Error(result.error)
+    if (!result.value) { setStatus('저장이 취소되었습니다. 만든 썸네일은 유지됩니다.'); return false }
+    sessions.current.set(THUMB, savePhotoSession(sessions.current.get(THUMB)!, null, result.value.folderLabel))
+    if (activeId.current === THUMB) setDirty(false)
+    setOutputFolder(result.value.folderLabel)
+    setStatus(`썸네일 저장 완료 · ${result.value.name} (1080 × 1080)`)
+    await syncReferences(THUMB)
+    return true
+  }
+  const saveThumb = () => run(async () => { await saveThumbCurrent() })
+
   let outputError = '', outputLabel = ''
   try {
     if (!validOutput(output)) throw new Error('출력 길이는 1~8192 정수로 입력하세요. JPG 품질은 100입니다.')
@@ -594,7 +804,11 @@ function App() {
   // Ctrl/Cmd+S saves the current photo in place (no move); the toolbar keeps only 저장하고 다음.
   const saveShortcut = useRef(() => {})
   // Any open modal (close/switch confirmation, sticker manager) blocks it; state flags clear a tick later than the dialog closes.
-  saveShortcut.current = () => { if (mode === 'photo' && canSave && !document.querySelector('dialog[open]')) void save() }
+  saveShortcut.current = () => {
+    if (document.querySelector('dialog[open]')) return
+    if (mode === 'thumb' && !busy) void saveThumb()
+    else if (mode === 'photo' && canSave) void save()
+  }
   useEffect(() => {
     const onKey = (event: globalThis.KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== 's') return
@@ -612,7 +826,10 @@ function App() {
     {fieldsOpen && <fieldset className="placement-fields" disabled={busy} title="원본 픽셀 기준">
               <label>X<input aria-label="중심 X" type="number" value={Math.round(selection.x)} onChange={e => change({ ...selection, x: e.target.valueAsNumber })} /></label>
               <label>Y<input aria-label="중심 Y" type="number" value={Math.round(selection.y)} onChange={e => change({ ...selection, y: e.target.valueAsNumber })} /></label>
-              {region ? <>
+              {shapeItem ? <>
+                <label>너비<input aria-label="도형 너비" type="number" min="1" max="32768" value={Math.round(shapeItem.width)} onChange={e => change({ ...shapeItem, width: e.target.valueAsNumber })} /></label>
+                <label>높이<input aria-label="도형 높이" type="number" min="1" max="32768" value={Math.round(shapeItem.height)} onChange={e => change({ ...shapeItem, height: e.target.valueAsNumber })} /></label>
+              </> : region ? <>
                 <label>너비<input aria-label="영역 너비" type="number" min="1" max="32768" value={Math.round(region.width)} onChange={e => change({ ...region, width: e.target.valueAsNumber })} /></label>
                 <label>높이<input aria-label="영역 높이" type="number" min="1" max="32768" value={Math.round(region.height)} onChange={e => change({ ...region, height: e.target.valueAsNumber })} /></label>
               </> : textItem ? null : <label>너비<input aria-label="스티커 너비" type="number" min="1" max="32768" value={Math.round(selection.width)} onChange={e => change({ ...selection, width: e.target.valueAsNumber, height: e.target.valueAsNumber * selection.height / selection.width })} /></label>}
@@ -627,8 +844,19 @@ function App() {
       <button className="icon" aria-label="위로" title="한 단계 위로 (다른 스티커 위에 겹치기)" disabled={placement.zOrder === scene.stickers.length - 1} onClick={() => editScene(reorderSelected(currentHistory.current.present, 1))}><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="2.5" y="6.5" width="7" height="7" rx="1" strokeDasharray="2 1.6"/><rect x="6.5" y="2.5" width="7" height="7" rx="1" fill="currentColor" fillOpacity=".25"/></svg></button>
       <button className="icon" aria-label="아래로" title="한 단계 아래로 (다른 스티커 밑으로)" disabled={placement.zOrder === 0} onClick={() => editScene(reorderSelected(currentHistory.current.present, -1))}><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="6.5" y="2.5" width="7" height="7" rx="1"/><rect x="2.5" y="6.5" width="7" height="7" rx="1" fill="currentColor" fillOpacity=".25" strokeDasharray="2 1.6"/></svg></button>
     </>}
+    {shapeItem && <>
+      <button className="icon" aria-label="위로" title="한 단계 앞으로 (다른 도형 위에 겹치기)" disabled={scene.shapes.at(-1)?.id === shapeItem.id} onClick={() => editScene(reorderSelected(currentHistory.current.present, 1))}><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="2.5" y="6.5" width="7" height="7" rx="1" strokeDasharray="2 1.6"/><rect x="6.5" y="2.5" width="7" height="7" rx="1" fill="currentColor" fillOpacity=".25"/></svg></button>
+      <button className="icon" aria-label="아래로" title="한 단계 뒤로 (다른 도형 밑으로)" disabled={scene.shapes[0]?.id === shapeItem.id} onClick={() => editScene(reorderSelected(currentHistory.current.present, -1))}><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="6.5" y="2.5" width="7" height="7" rx="1"/><rect x="2.5" y="6.5" width="7" height="7" rx="1" fill="currentColor" fillOpacity=".25" strokeDasharray="2 1.6"/></svg></button>
+    </>}
     <button className="icon danger" aria-label="선택 삭제" title="삭제 (Delete)" onClick={() => editScene(removeSelected(currentHistory.current.present))}><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2.5 4.5h11M6.5 4.5V3a.5.5 0 0 1 .5-.5h2a.5.5 0 0 1 .5.5v1.5M4 4.5l.7 8.6a1 1 0 0 0 1 .9h4.6a1 1 0 0 0 1-.9l.7-8.6"/></svg></button>
   </> : null
+  const textPanel = <TextPanel photoOpen={!!photo} busy={busy} texts={scene.texts} selected={textItem}
+          style={textItem?.style ?? textDefaults.style} fontSize={textItem?.fontSize ?? null} maxFontSize={maxFontSize} systemFonts={systemFonts} textArea={textArea}
+          myPresets={myPresets} onSaveMine={saveMyPreset} onApplyMine={applyMyPreset} onDeleteMine={id => storeMyPresets(myPresets.filter(item => item.id !== id))}
+          onAdd={() => void addTextItem()} onSelect={selectInstance} onText={text => changeText({ text }, true)} onStyle={changeTextStyle} onFontSize={changeFontSize}
+          onCommit={commitLive} onClear={() => editScene(clearTexts(currentHistory.current.present))}>
+          {textItem ? numericFields : <p className="hint">{photo ? '글자를 누르면 선택됩니다. 모서리를 끌면 크기, 위쪽 핸들로 회전합니다. 방향키 1px, Shift+방향키 10px 이동.' : ''}</p>}
+        </TextPanel>
   return <main onKeyDown={handleEditorKey}
     onDragEnter={event => { if (!hasFiles(event)) return; event.preventDefault(); dragDepth.current++; setDragging(dropZone(event)) }}
     onDragOver={event => { if (!hasFiles(event)) return; event.preventDefault(); event.dataTransfer.dropEffect = dropBlocked ? 'none' : 'copy'; const zone = dropZone(event); if (dragging !== zone) setDragging(zone) }}
@@ -672,8 +900,30 @@ function App() {
     <header className="toolbar">
       <h1>포토꾸미</h1>
       <div className="mode-tabs" role="tablist" aria-label="작업 모드">
-        <button role="tab" aria-selected={mode === 'photo'} disabled={gifBusy} onClick={() => setMode('photo')}>사진 편집</button>
-        <button role="tab" aria-selected={mode === 'gif'} disabled={busy} onClick={() => { setSettingsOpen(false); setMode('gif') }}>GIF 만들기</button>
+        <button role="tab" aria-selected={mode === 'photo'} disabled={gifBusy} onClick={() => switchMode('photo')}>사진 편집</button>
+        <button role="tab" aria-selected={mode === 'thumb'} disabled={busy || gifBusy} aria-label="썸네일 만들기" onClick={() => switchMode('thumb')}><span className="label">썸네일 만들기</span><span className="label-short">썸네일</span></button>
+        <button role="tab" aria-selected={mode === 'gif'} disabled={busy} onClick={() => switchMode('gif')}>GIF 만들기</button>
+      </div>
+      <div className="photo-tools" hidden={mode !== 'thumb'}>
+        <nav aria-label="썸네일 사진" className="toolbar-group">
+          <button onClick={openThumbPhoto} disabled={busy} title="배경에 넣을 사진을 고릅니다">사진 넣기</button>
+        </nav>
+        <div className="toolbar-group" aria-label="썸네일 편집 이력">
+          <button className="icon" aria-label="실행 취소" title="실행 취소 (Ctrl+Z)" disabled={busy || !history.past.length} onClick={() => applyHistory(undoScene(currentHistory.current))}><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M5.5 3.5 2.5 6.5l3 3"/><path d="M2.5 6.5h7a4 4 0 0 1 0 8H7"/></svg></button>
+          <button className="icon" aria-label="다시 실행" title="다시 실행 (Ctrl+Shift+Z)" disabled={busy || !history.future.length} onClick={() => applyHistory(redoScene(currentHistory.current))}><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="m10.5 3.5 3 3-3 3"/><path d="M13.5 6.5h-7a4 4 0 0 0 0 8H9"/></svg></button>
+        </div>
+        <div className="toolbar-group">
+          <button className="text-toggle" aria-label="글자 넣기" disabled={busy || !photo} title="글자 넣기 (T)" onClick={() => void addTextItem()}>
+            <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M3 3.5h10M8 3.5v10"/></svg><span className="label"> 글자</span>
+          </button>
+        </div>
+        <div className="toolbar-spacer" />
+        <label className="thumb-format" title="블로그에는 JPG가 가볍습니다">형식
+          <select aria-label="썸네일 형식" value={thumbFormat} disabled={busy} onChange={e => { const value = e.target.value as 'jpg' | 'png'; setThumbFormat(value); savePref('pk.thumbFormat', value) }}>
+            <option value="jpg">JPG</option><option value="png">PNG</option>
+          </select>
+        </label>
+        <button className="primary" onClick={saveThumb} disabled={busy || !photo} title="1080×1080으로 출력 폴더에 저장 (Ctrl+S)">{busy ? '처리 중…' : '썸네일 저장'}</button>
       </div>
       <div className="photo-tools" hidden={mode !== 'photo'}>
       <nav aria-label="파일 작업" className="toolbar-group">
@@ -727,14 +977,34 @@ function App() {
       <GifMaker incoming={incomingVideo} outputFolder={outputFolder} active={mode === 'gif'} onBusyChange={setGifBusy}
         onSaved={receipt => setOutputFolder(receipt.folderLabel)} onStatus={showStatus} onError={showError} />
     </div>
-    <section className="workspace" hidden={mode !== 'photo'}>
+    <section className="workspace" hidden={mode === 'gif'}>
       <div className="canvas-column">
-        {photo ? <EditorCanvas key={photo.id} photo={photo} assets={assets.current} scene={scene} disabled={busy} onChange={(id, value) => change(value, id)} selectionTools={editTools}
+        {mode === 'thumb' ? (photo ? <EditorCanvas key={photo.id} photo={photo} assets={assets.current} scene={scene} disabled={busy} onChange={(id, value) => change(value, id)} selectionTools={editTools}
+          onSelect={selectFromCanvas} info={<>썸네일 · {THUMB_SIZE} × {THUMB_SIZE} px · {thumbFormat === 'jpg' ? 'JPG' : 'PNG'} · <b className={dirty ? 'dirty' : ''}>{dirty ? '수정됨' : sessions.current.get(THUMB)?.saved ? '저장됨' : '새 썸네일'}</b></>} />
+          : <div className="empty"><span>썸네일을 준비하는 중…</span></div>)
+        : photo ? <EditorCanvas key={photo.id} photo={photo} assets={assets.current} scene={scene} disabled={busy} onChange={(id, value) => change(value, id)} selectionTools={editTools}
           drawMode={drawMode} drawShape={regionDefaults.shape} onDraw={drawRegion} onSelect={selectFromCanvas}
           info={<>{photo.name} · {photo.width} × {photo.height} px{outputLabel && outputLabel !== `${photo.width} × ${photo.height} px` ? ` → ${outputLabel}` : ''} · <b className={dirty ? 'dirty' : ''}>{dirty ? '수정됨' : '원본 / 저장됨'}</b></>} />
           : <div className="empty"><div className="drop-target"><strong>사진을 이 창으로 끌어다 놓으세요</strong><span>탐색기에서 JPG·PNG 사진 여러 장이나 폴더를 한 번에 끌어 놓으면 바로 불러옵니다.</span><span>또는 위의 <b>사진 열기</b> · <b>폴더 열기</b></span></div></div>}
       </div>
       <aside>
+        {mode === 'thumb' ? <>
+        <div className="side-tabs" role="tablist" aria-label="썸네일 패널">
+          <button role="tab" aria-selected={thumbTab === 'template'} onClick={() => setThumbTab('template')}>템플릿</button>
+          <button role="tab" aria-selected={thumbTab === 'background'} onClick={() => setThumbTab('background')}>배경</button>
+          <button role="tab" aria-selected={thumbTab === 'text'} onClick={() => setThumbTab('text')}>글자{!!scene.texts.length && <span className="tab-count">{scene.texts.length}</span>}</button>
+          <button role="tab" aria-selected={thumbTab === 'deco'} onClick={() => setThumbTab('deco')}>꾸미기</button>
+        </div>
+        {thumbTab === 'template' ? <TemplateGallery filter={templateFilter} onFilter={setTemplateFilter} theme={scene.theme} current={scene.template} photo={thumbPhoto && scene.background?.photoId ? thumbPhoto : null}
+          busy={busy} mine={myTemplates} maxMine={MAX_MY_TEMPLATES} onApply={template => void applyThumbTemplate(template)} onTheme={chooseTheme}
+          onSaveMine={() => void saveMyTemplate()} onApplyMine={template => void applyMyTemplate(template)} onDeleteMine={id => storeMyTemplates(myTemplates.filter(item => item.id !== id))} />
+        : thumbTab === 'background' ? <BackgroundPanel background={scene.background ?? DEFAULT_BACKGROUND} photos={photos} busy={busy} onChange={changeBackground} onCommit={commitLive} onOpenPhoto={() => void openThumbPhoto()} />
+        : thumbTab === 'text' ? textPanel
+        : <>
+          <ShapePanel shape={shapeItem} count={scene.shapes.length} busy={busy} onAdd={addShapeItem} onStyle={changeShapeStyle} onCommit={commitLive}>{shapeItem ? numericFields : null}</ShapePanel>
+          <div className={`library-pane${dragging === 'stickers' ? ' drop-here' : ''}`} hidden={libraryOpen}><LibraryPanel {...libraryProps} mode="pick" onManage={() => setLibraryOpen(true)} /></div>
+        </>}
+        </> : <>
         <div className="side-tabs" role="tablist" aria-label="편집 패널">
           <button role="tab" aria-selected={sideTab === 'stickers'} onClick={() => openTab('stickers')}>스티커</button>
           <button role="tab" aria-selected={sideTab === 'regions'} onClick={() => openTab('regions')}>가림{!!scene.regions.length && <span className="tab-count">{scene.regions.length}</span>}</button>
@@ -770,13 +1040,7 @@ function App() {
               onClick={() => selectInstance(item.id)}>{item.shape === 'rect' ? '▭' : '◯'} {item.style === 'blur' ? '블러' : '모자이크'} {index + 1}</button>)}
           </div>}
           {region ? numericFields : <p className="hint">{photo ? '켜 둔 채로 여러 곳을 연속으로 가릴 수 있습니다. 빈 곳을 드래그하면 새 영역, 영역을 누르면 선택됩니다. Shift는 정원·정사각형, 사진 밖에서 드래그를 시작하면 사진 끝에 딱 맞춰집니다. Esc나 B로 도구를 끕니다.' : '사진을 열면 블러·모자이크로 가릴 수 있습니다.'}</p>}
-        </section> : sideTab === 'text' ? <TextPanel photoOpen={!!photo} busy={busy} texts={scene.texts} selected={textItem}
-          style={textItem?.style ?? textDefaults.style} fontSize={textItem?.fontSize ?? null} maxFontSize={maxFontSize} systemFonts={systemFonts} textArea={textArea}
-          myPresets={myPresets} onSaveMine={saveMyPreset} onApplyMine={applyMyPreset} onDeleteMine={id => storeMyPresets(myPresets.filter(item => item.id !== id))}
-          onAdd={() => void addTextItem()} onSelect={selectInstance} onText={text => changeText({ text }, true)} onStyle={changeTextStyle} onFontSize={changeFontSize}
-          onCommit={commitLive} onClear={() => editScene(clearTexts(currentHistory.current.present))}>
-          {textItem ? numericFields : <p className="hint">{photo ? '글자를 누르면 선택됩니다. 모서리를 끌면 크기, 위쪽 핸들로 회전합니다. 방향키 1px, Shift+방향키 10px 이동.' : ''}</p>}
-        </TextPanel> : sideTab === 'adjust' ? <section className="adjust-panel" aria-label="사진 보정">
+        </section> : sideTab === 'text' ? textPanel : sideTab === 'adjust' ? <section className="adjust-panel" aria-label="사진 보정">
           {ADJUSTMENT_KEYS.map(key => {
             const label = { exposure: '노출', contrast: '대비', saturation: '채도', temperature: '색온도' }[key]
             return <div key={key} className={`adjust-row ${key}`}>
@@ -808,6 +1072,7 @@ function App() {
           {placement ? numericFields : <p className="hint">스티커를 클릭하면 사진 위에 복제·순서·삭제 버튼이 나타납니다. 방향키 1px, Shift+방향키 10px 이동.</p>}
         </section>}
         </>}
+        </>}
       </aside>
     </section>
     {!!photos.length && mode === 'photo' && <section className="photo-list" aria-label="사진 목록">
@@ -831,7 +1096,8 @@ function App() {
         })}
       </div>
     </section>}
-    <footer className="statusbar"><p role="status" aria-live="polite">{status || (mode === 'photo' && photo ? <span className="shortcuts">Ctrl+S 저장 · Ctrl+Z 실행 취소 · Ctrl+D 복제 · Delete 삭제 · B 블러·모자이크 · T 글자 · Ctrl+휠 확대</span> : '')}</p>{error && !libraryOpen && !pendingPhoto && <p role="alert">{error}</p>}
+    <footer className="statusbar"><p role="status" aria-live="polite">{status || (mode === 'photo' && photo ? <span className="shortcuts">Ctrl+S 저장 · Ctrl+Z 실행 취소 · Ctrl+D 복제 · Delete 삭제 · B 블러·모자이크 · T 글자 · Ctrl+휠 확대</span>
+  : mode === 'thumb' ? <span className="shortcuts">Ctrl+S 썸네일 저장 · Ctrl+Z 실행 취소 · Ctrl+D 복제 · Delete 삭제 · T 글자</span> : '')}</p>{error && !libraryOpen && !pendingPhoto && <p role="alert">{error}</p>}
       <div className="update-area" role="group" aria-label="업데이트">
         {update?.status === 'available' && dismissedUpdate !== update.version && <>
           <span className="update-note">새 버전 {update.version}</span>

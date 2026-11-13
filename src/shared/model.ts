@@ -2,6 +2,7 @@ import type { OutputSettings } from './output'
 import type { GifOptions, GifReceipt, ToolStatus, VideoInfo, VideoRef } from './gif'
 import type { LibrarySticker, StickerMetadata, LibraryImportResult } from './library'
 import type { UpdateState } from './update'
+import type { ThumbSaveRequest } from './shapes'
 export type AssetKind = 'photo' | 'sticker'
 export interface ImageAsset {
   id: string
@@ -69,6 +70,8 @@ export interface PhotoApi {
   getOutputSettings(): Promise<Result<OutputSettings>>
   updateOutputSettings(output: OutputSettings): Promise<Result<OutputSettings>>
   saveImage(request: SaveRequest): Promise<Result<SaveReceipt | null>>
+  /** Saves a 1080×1080 thumbnail as <photo>_thumb.jpg/png in the output folder. */
+  saveThumbnail(request: ThumbSaveRequest): Promise<Result<SaveReceipt | null>>
 }
 export function fitScale(width: number, height: number, availableWidth: number, availableHeight: number): number {
   return Math.min(1, Math.max(1, availableWidth) / width, Math.max(1, availableHeight) / height)

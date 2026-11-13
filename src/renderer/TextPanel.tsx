@@ -30,7 +30,7 @@ interface Props {
   children?: ReactNode
 }
 /** Native color inputs fire input events while the picker is open; the change event closes one undo step. */
-function ColorField({ label, value, disabled, onLive, onCommit }: { label: string; value: string; disabled: boolean; onLive(value: string): void; onCommit(): void }) {
+export function ColorField({ label, value, disabled, onLive, onCommit }: { label: string; value: string; disabled: boolean; onLive(value: string): void; onCommit(): void }) {
   const input = useRef<HTMLInputElement>(null)
   const commit = useRef(onCommit)
   commit.current = onCommit

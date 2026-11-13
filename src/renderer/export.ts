@@ -5,6 +5,8 @@ import { renderAdjusted, releaseCanvas } from './filters'
 import { NEUTRAL_ADJUSTMENTS, type Adjustments } from '../shared/filters'
 import type { TextItem } from '../shared/text'
 import { drawText, ensureTextFonts } from './text'
+import { drawShape } from './thumb'
+import type { ShapeItem } from '../shared/shapes'
 /** PNG encoding runs in a worker: main-thread canvas encoding waits for idle time and stalled saves for seconds when the window was behind. */
 function encodePng(bitmap: ImageBitmap): Promise<Uint8Array> {
   const worker = new Worker(new URL('./encode-worker.ts', import.meta.url), { type: 'module' })
@@ -15,11 +17,11 @@ function encodePng(bitmap: ImageBitmap): Promise<Uint8Array> {
     worker.postMessage({ bitmap }, [bitmap])
   })
 }
-export async function composePng(photo: ImageBitmap, instances: StickerInstance[], assets: ReadonlyMap<string, { bitmap: ImageBitmap }>, output: OutputSettings = DEFAULT_OUTPUT, regions: BlurRegion[] = [], adjust: Adjustments = NEUTRAL_ADJUSTMENTS, texts: TextItem[] = []): Promise<Uint8Array> {
+export async function composePng(photo: ImageBitmap, instances: StickerInstance[], assets: ReadonlyMap<string, { bitmap: ImageBitmap }>, output: OutputSettings = DEFAULT_OUTPUT, regions: BlurRegion[] = [], adjust: Adjustments = NEUTRAL_ADJUSTMENTS, texts: TextItem[] = [], shapes: ShapeItem[] = []): Promise<Uint8Array> {
   // Fonts must be ready before drawing, or canvas silently falls back to another face.
   await ensureTextFonts(texts)
   const canvas = new OffscreenCanvas(1, 1)
-  // Order: adjustments → blur/mosaic (hides adjusted pixels) → stickers (never adjusted) → texts.
+  // Order: adjustments → blur/mosaic (hides adjusted pixels) → shapes → stickers (never adjusted) → texts.
   const adjusted = renderAdjusted(photo, adjust)
   const base = adjusted ?? photo
   const size = outputSize(photo.width, photo.height, output)
@@ -42,6 +44,13 @@ export async function composePng(photo: ImageBitmap, instances: StickerInstance[
       context.drawImage(patch.canvas, patch.bounds.x, patch.bounds.y)
       context.restore()
       patch.canvas.width = 0; patch.canvas.height = 0
+    }
+    for (const shape of shapes) {
+      context.save()
+      context.translate(shape.x, shape.y)
+      context.rotate(shape.rotation * Math.PI / 180)
+      drawShape(context, shape)
+      context.restore()
     }
     for (const placement of [...instances].sort((a, b) => a.zOrder - b.zOrder)) {
       const sticker = assets.get(placement.assetId)?.bitmap

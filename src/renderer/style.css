@@ -327,13 +327,49 @@ dialog.library-dialog { width: min(860px, 92vw); max-width: 92vw; max-height: 86
 .library-form input { width: 220px; }
 .library-dialog .library > small { color: var(--muted); font-size: 12px; }
 
+/* 썸네일 만들기: one panel per tab; only the template grid (or the panel itself on short windows) scrolls. */
+.thumb-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; overflow-y: auto; }
+.thumb-panel > * { flex: none; }
+.thumb-panel .hint { font-size: 11px; line-height: 1.45; }
+.segmented.four { grid-template-columns: repeat(4, 1fr); }
+.segmented.four button { padding: 0 2px; white-space: nowrap; }
+.theme-row { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; }
+.theme-row button { height: 22px; padding: 0; }
+.theme-row .theme-default { padding: 0 7px; font-size: 11px; border-radius: 11px; }
+.theme-row .theme-default[aria-checked=true] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.theme-row .swatch { width: 19px; height: 19px; border-radius: 50%; border: 1px solid #00000022; }
+.theme-row .swatch[aria-checked=true] { outline: 2px solid var(--accent); outline-offset: 1px; }
+.template-grid { flex: 1 1 auto !important; min-height: 0; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); grid-auto-rows: max-content; gap: 6px; align-content: start; padding: 2px; scrollbar-width: thin; }
+.template-card { width: 100%; height: auto; padding: 0; overflow: hidden; border-radius: 6px; border-color: var(--line); background: var(--surface-2); }
+.template-card canvas, .template-card img { display: block; width: 100%; height: auto; aspect-ratio: 1; }
+.template-card[aria-pressed=true] { outline: 2px solid var(--accent); outline-offset: 1px; }
+.template-card.save { aspect-ratio: 1; display: grid; place-items: center; align-content: center; gap: 2px; border-style: dashed; background: var(--surface); color: var(--accent); font-size: 20px; font-weight: 600; }
+.template-card.save span { font-size: 11px; line-height: 1.3; }
+.my-template { position: relative; min-width: 0; }
+.my-template .remove { position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; padding: 0; border-radius: 50%; font-size: 12px; line-height: 1; display: none; place-items: center; background: var(--surface); }
+.my-template:hover .remove, .my-template:focus-within .remove { display: grid; }
+.thumb-photos { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; max-height: 128px; overflow-y: auto; scrollbar-width: thin; }
+.thumb-photos button { width: 100%; height: auto; aspect-ratio: 4 / 3; padding: 0; overflow: hidden; border-color: var(--line); }
+.thumb-photos button img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.thumb-photos button[aria-pressed=true] { outline: 2px solid var(--accent); outline-offset: 1px; }
+.thumb-photos .add-photo { grid-column: span 2; aspect-ratio: auto; height: 100%; min-height: 42px; border-style: dashed; color: var(--accent); font-size: 12px; font-weight: 600; background: var(--surface); }
+.thumb-panel .text-fields label .hint { flex: none; margin-left: 6px; }
+.thumb-panel .text-fields label input.color { flex: none; margin-left: 8px; }
+.shape-add { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; }
+.shape-add button { height: 44px; padding: 0; display: grid; place-items: center; align-content: center; gap: 2px; font-size: 11px; color: var(--text); }
+.shape-add button svg { color: var(--accent); }
+aside .thumb-panel[aria-label=꾸미기] { flex: none; max-height: 52%; border-bottom: 1px solid var(--line); }
+.show-photo { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.thumb-format { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.thumb-format select { height: 30px; }
 @media (max-width: 960px) {
   .toolbar { gap: 6px; padding: 6px 8px; }
   .toolbar-group { padding-left: 6px; }
   .toolbar button:not(.icon) { padding: 0 9px; }
   .mode-tabs button { padding: 0 8px; }
   .draw-toggle .label { display: none; }
-  .draw-toggle .label-short { display: inline; }
+  .draw-toggle .label-short, .mode-tabs .label-short { display: inline; }
+  .mode-tabs .label { display: none; }
   .text-toggle .label { display: none; }
   .text-fields .field-row .segmented.three { grid-template-columns: repeat(3, 24px); }
   .text-fields .color-label { display: none; }

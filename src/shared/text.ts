@@ -1,5 +1,6 @@
 import { validPlacement, type Placement } from './model'
 import { DEFAULT_FONT, validFontRef, type FontRef } from './fonts'
+import { validThemed, type ThemeSlot } from './shapes'
 export type TextAlign = 'left' | 'center' | 'right'
 /** Look of a text item. Sizes in percent are relative to the font size so a resize keeps proportions. */
 export interface TextStyle {
@@ -20,7 +21,13 @@ export interface TextStyle {
  * Text placed on a photo. (x, y) is the box center in logical photo pixels, rotation in degrees.
  * width/height are the measured box (glyphs + outline + box padding) and scale together with fontSize.
  */
-export interface TextItem extends Placement { id: string; text: string; fontSize: number; style: TextStyle }
+export interface TextItem extends Placement {
+  id: string; text: string; fontSize: number; style: TextStyle
+  /** Thumbnail templates: which part this text plays (title, kicker…) so a template swap keeps its content. */
+  slot?: string
+  /** Style colors that follow the thumbnail color theme; a manual change of that color drops the link. */
+  themed?: Partial<Record<'color' | 'strokeColor' | 'boxColor', ThemeSlot>>
+}
 export const MAX_TEXTS = 50
 export const MAX_TEXT_LENGTH = 500
 export const MIN_FONT_SIZE = 4
@@ -84,6 +91,7 @@ export const validFontSize = (value: number) => Number.isFinite(value) && value 
 export function validTextItem(item: TextItem): boolean {
   return validPlacement(item) && typeof item.id === 'string' && typeof item.text === 'string' && item.text.length <= MAX_TEXT_LENGTH
     && validFontSize(item.fontSize) && validTextStyle(item.style)
+    && (item.slot === undefined || (typeof item.slot === 'string' && /^[a-z0-9]{1,16}$/.test(item.slot))) && validThemed(item.themed, ['color', 'strokeColor', 'boxColor'])
 }
 export const LINE_HEIGHT = 1.3
 export interface TextLayout {

@@ -14,6 +14,7 @@ import { seedDefaultStickers } from './defaults'
 import { OutputStore } from './settings'
 import { outputSize, validOutput } from '../shared/output'
 import { PhotoStore, validDroppedPaths } from './photos'
+import { THUMB_SESSION_ID, THUMB_SIZE, validThumbSaveRequest, type ThumbSaveRequest } from '../shared/shapes'
 import { ToolStore, VideoStore, runTool } from './ffmpeg'
 import { VIDEO_EXTENSIONS, validGifOptions, gifArgs, previewArgs, previewFps, parseProbe, splitJpegs, parseProgress, type GifOptions, type GifReceipt, type VideoInfo, type VideoRef } from '../shared/gif'
 import type { ChildProcess } from 'node:child_process'
@@ -219,6 +220,36 @@ async function save(request: SaveRequest): Promise<SaveReceipt | null> {
   }
 }
 
+/** A finished 1080×1080 thumbnail: named after its background photo (or 썸네일), saved next to the other results, never overwriting. */
+async function saveThumbnail(request: ThumbSaveRequest): Promise<SaveReceipt | null> {
+  if (!validThumbSaveRequest(request)) throw new Error('유효하지 않은 저장 요청입니다.')
+  const source = request.photoId ? photos.get(request.photoId).path : '썸네일.png'
+  if (request.png.byteLength > MAX_OUTPUT_BYTES) throw new Error('저장 이미지가 너무 큽니다.')
+  const info = inspectImage(request.png, 'photo', true)
+  if (info.width !== THUMB_SIZE || info.height !== THUMB_SIZE) throw new Error('썸네일 크기가 1080×1080이 아닙니다.')
+  const decoded = nativeImage.createFromBuffer(Buffer.from(request.png))
+  const size = decoded.getSize()
+  if (decoded.isEmpty() || size.width !== THUMB_SIZE || size.height !== THUMB_SIZE) throw new Error('저장 이미지가 손상되었습니다.')
+  // Re-encode decoded pixels; nothing from the incoming file is copied.
+  const encoded = request.format === 'jpg' ? decoded.toJPEG(100) : decoded.toPNG()
+  if (!encoded.length || encoded.length > MAX_OUTPUT_BYTES) throw new Error('저장 이미지가 너무 큽니다.')
+  let directory = outputDirectory
+  if (!directory) {
+    const selected = await dialog.showOpenDialog(win!, { title: '결과를 저장할 폴더', properties: ['openDirectory', 'createDirectory'] })
+    if (selected.canceled || !selected.filePaths[0]) return null
+    directory = selected.filePaths[0]
+  }
+  try {
+    const target = await realpath(directory)
+    const name = basename(await saveUnique(target, source, encoded, request.format === 'jpg' ? '.jpg' : '.png', '_thumb'))
+    setOutputDirectory(target)
+    return { name, folderLabel: target }
+  } catch (error) {
+    if (error instanceof SaveCleanupError) throw error
+    throw new Error('저장하지 못했습니다. 폴더 권한·여유 공간을 확인하세요. 만든 썸네일은 유지됩니다.', { cause: error })
+  }
+}
+
 /** Restore the last window placement only while it is still mostly on a connected display. */
 function visibleBounds(bounds: WindowBounds | null): WindowBounds | null {
   if (!bounds) return null
@@ -312,14 +343,15 @@ app.whenReady().then(() => {
     !!win && webContents?.id === win.webContents.id && allowedPermission(permission, origin, pageUrl))
   for (const [channel, action] of [
     ['photo:choose', choosePhotos], ['photo:folder', choosePhotoFolder], ['output:folder', chooseOutputFolder], ['photo:save', save], ['photo:read', (id: string) => photos.read(id)],
-    ['photo:drop', dropFiles], ['photo:remove', removePhoto]
+    ['photo:drop', dropFiles], ['photo:remove', removePhoto], ['thumb:save', saveThumbnail]
   ] as const) {
     ipcMain.handle(channel, async (event, ...args: unknown[]): Promise<Result<unknown>> => {
       if (!win || !trustedSender(event.sender.id, win.webContents.id, event.senderFrame === win.webContents.mainFrame, event.senderFrame?.url ?? '', pageUrl)) {
         return { ok: false, error: '허용되지 않은 요청입니다.' }
       }
       if (busy) return { ok: false, error: '현재 작업이 끝난 뒤 다시 시도하세요.' }
-      if (!['photo:save', 'photo:read', 'photo:drop', 'photo:remove'].includes(channel) && args.length) return { ok: false, error: '유효하지 않은 요청입니다.' }
+      if (!['photo:save', 'photo:read', 'photo:drop', 'photo:remove', 'thumb:save'].includes(channel) && args.length) return { ok: false, error: '유효하지 않은 요청입니다.' }
+      if (channel === 'thumb:save' && (args.length !== 1 || !validThumbSaveRequest(args[0]))) return { ok: false, error: '유효하지 않은 저장 요청입니다.' }
       if (channel === 'photo:save' && (args.length !== 1 || !validSaveRequest(args[0]))) return { ok: false, error: '유효하지 않은 저장 요청입니다.' }
       if (channel === 'photo:drop' && (args.length !== 1 || !validDroppedPaths(args[0]))) return { ok: false, error: '끌어 놓은 항목을 확인할 수 없습니다.' }
       if ((channel === 'photo:read' || channel === 'photo:remove') && (args.length !== 1 || !validAssetId(args[0]))) return { ok: false, error: '유효하지 않은 사진 요청입니다.' }
@@ -414,7 +446,7 @@ app.whenReady().then(() => {
   }
   ipcMain.handle('editor:references', (event, photoId: unknown, ids: unknown): Result<null> => {
     if (!win || !trustedSender(event.sender.id, win.webContents.id, event.senderFrame === win.webContents.mainFrame, event.senderFrame?.url ?? '', pageUrl)) return { ok: false, error: '허용되지 않은 요청입니다.' }
-    if (typeof photoId !== 'string' || !photos.list().some(item => item.id === photoId) || !Array.isArray(ids) || ids.length > 100 || new Set(ids).size !== ids.length
+    if (typeof photoId !== 'string' || (photoId !== THUMB_SESSION_ID && !photos.list().some(item => item.id === photoId)) || !Array.isArray(ids) || ids.length > 100 || new Set(ids).size !== ids.length
       || !ids.every(id => validAssetId(id) && permittedStickerIds.has(id))) return { ok: false, error: '잘못된 스티커 참조입니다.' }
     photoReferences.set(photoId, ids)
     activeStickerIds = new Set([...photoReferences.values()].flat())

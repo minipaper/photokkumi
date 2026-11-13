@@ -9,6 +9,8 @@ import type { Scene } from '../shared/scene'
 import { fitScale } from '../shared/model'
 import type { TextItem } from '../shared/text'
 import { drawText } from './text'
+import { drawShape as paintShape } from './thumb'
+import type { ShapeItem } from '../shared/shapes'
 // A bundled vector cursor keeps the rotation affordance crisp at high DPI.
 const rotationCursor = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><g fill="none" stroke="white" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M24 11a10 10 0 1 0 1 9M24 4v8h-8"/></g><g fill="none" stroke="#262b36" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M24 11a10 10 0 1 0 1 9M24 4v8h-8"/></g></svg>')}") 16 16, crosshair`
 interface Props {
@@ -85,11 +87,12 @@ export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChang
   }, [])
   // Each tool edits its own layer: stickers normally, regions while the region tool is on.
   const selectedRegion = scene.regions.some(item => item.id === scene.selectedId)
-  const selectedOnLayer = !!scene.selectedId && (drawMode ? selectedRegion : [...scene.stickers, ...scene.texts].some(item => item.id === scene.selectedId))
+  const selectedShape = scene.shapes.some(item => item.id === scene.selectedId)
+  const selectedOnLayer = !!scene.selectedId && (drawMode ? selectedRegion : [...scene.stickers, ...scene.shapes, ...scene.texts].some(item => item.id === scene.selectedId))
   useEffect(() => {
     const image = scene.selectedId ? images.current.get(scene.selectedId) : undefined
     transformer.current?.nodes(image && !panMode && selectedOnLayer ? [image] : [])
-  }, [scene.selectedId, scene.stickers, scene.regions, scene.texts, panMode, selectedOnLayer])
+  }, [scene.selectedId, scene.stickers, scene.regions, scene.shapes, scene.texts, panMode, selectedOnLayer])
   // A font that finishes loading after the first paint (e.g. an installed font) redraws the texts.
   useEffect(() => {
     const redraw = () => stage.current?.batchDraw()
@@ -149,7 +152,7 @@ export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChang
     setZoom(nextScale)
   }
   // Floating bar: screen box of the selected item's rotated bounds, placed above it (or below near the top edge).
-  const selected = [...scene.stickers, ...scene.texts, ...scene.regions].find(item => item.id === scene.selectedId)
+  const selected = [...scene.stickers, ...scene.shapes, ...scene.texts, ...scene.regions].find(item => item.id === scene.selectedId)
   let toolbarAt: { left: number; top: number } | null = null
   if (selected && selectedOnLayer && selectionTools && !moving && !draft && !panMode && !disabled) {
     const angle = selected.rotation * Math.PI / 180, cos = Math.abs(Math.cos(angle)), sin = Math.abs(Math.sin(angle))
@@ -190,6 +193,20 @@ export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChang
       ? <Rect key={region.id} {...common} width={region.width} height={region.height} offsetX={region.width / 2} offsetY={region.height / 2} />
       : <Ellipse key={region.id} {...common} radiusX={region.width / 2} radiusY={region.height / 2} />
   }
+  const shapeNode = (item: ShapeItem) => <Shape key={item.id} name="shape-item"
+    ref={node => { if (node) images.current.set(item.id, node); else images.current.delete(item.id) }}
+    x={item.x} y={item.y} width={item.width} height={item.height} offsetX={item.width / 2} offsetY={item.height / 2} rotation={item.rotation}
+    sceneFunc={(context, shape) => {
+      const native = context._context
+      native.save(); native.translate(shape.width() / 2, shape.height() / 2); paintShape(native, { ...item, width: shape.width(), height: shape.height() }); native.restore()
+    }}
+    hitFunc={(context, shape) => { context.beginPath(); context.rect(0, 0, shape.width(), shape.height()); context.closePath(); context.fillStrokeShape(shape) }}
+    draggable={interactive} listening={interactive}
+    onMouseEnter={hoverCursor('move')} onMouseLeave={hoverCursor('')}
+    onMouseDown={() => onSelect(item.id)} onTouchStart={() => onSelect(item.id)}
+    onDragStart={() => { onSelect(item.id); setMoving(item.id) }} onTransformStart={() => setMoving(item.id)}
+    onDragEnd={event => { setMoving(null); onChange(item.id, { ...item, x: event.target.x(), y: event.target.y() }) }}
+    onTransformEnd={() => transformEnd(item.id)} />
   const textNode = (item: TextItem) => <Shape key={item.id} name="text-item"
     ref={node => { if (node) images.current.set(item.id, node); else images.current.delete(item.id) }}
     x={item.x} y={item.y} width={item.width} height={item.height} offsetX={item.width / 2} offsetY={item.height / 2} rotation={item.rotation}
@@ -234,6 +251,7 @@ export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChang
               </Group> : null
             })}
             {scene.regions.map(regionNode)}
+            {scene.shapes.map(shapeNode)}
             {scene.stickers.map(placement => <CanvasImage key={placement.id}
               ref={node => { if (node) images.current.set(placement.id, node); else images.current.delete(placement.id) }}
               image={assets.get(placement.assetId)?.bitmap}
@@ -253,9 +271,9 @@ export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChang
           </Group>
         </Layer>
         <Layer ref={layer => { layer?.getNativeCanvasElement().setAttribute('data-testid', 'editor-overlay') }}>
-          <Transformer ref={transformer} enabledAnchors={selectedRegion ? ['top-left', 'top-center', 'top-right', 'middle-left', 'middle-right', 'bottom-left', 'bottom-center', 'bottom-right'] : ['top-left', 'top-right', 'bottom-left', 'bottom-right']}
+          <Transformer ref={transformer} enabledAnchors={selectedRegion || selectedShape ? ['top-left', 'top-center', 'top-right', 'middle-left', 'middle-right', 'bottom-left', 'bottom-center', 'bottom-right'] : ['top-left', 'top-right', 'bottom-left', 'bottom-right']}
             rotateAnchorCursor={rotationCursor}
-            keepRatio={!selectedRegion} flipEnabled={false} rotateEnabled={!disabled} resizeEnabled={!disabled}
+            keepRatio={!selectedRegion && !selectedShape} flipEnabled={false} rotateEnabled={!disabled} resizeEnabled={!disabled}
             boundBoxFunc={(oldBox, newBox) => Math.abs(newBox.width) < 4 || Math.abs(newBox.height) < 4 || Math.abs(newBox.width) > 32768 * scale || Math.abs(newBox.height) > 32768 * scale ? oldBox : newBox} />
         </Layer>
       </Stage>

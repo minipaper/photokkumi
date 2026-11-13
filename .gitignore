@@ -14,3 +14,6 @@ test-results/
 /library.json
 PhotoKkumi-library_kkumi*.zip
 docs/images-raw/
+# Font build tool (scripts/prepare-fonts.py)
+.venv/
+.font-cache/

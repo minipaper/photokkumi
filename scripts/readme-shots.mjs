@@ -60,7 +60,26 @@ await field('중심 X', 560); await field('중심 Y', 835); await field('영역 
 await page.evaluate('document.activeElement?.blur()')
 await page.waitForTimeout(500)
 await shot('blur.png')
-// Adjust tab on the sunset photo.
+// Photo 4: a caption and a date tag with bundled fonts.
+await page.getByRole('button', { name: '사진 4: 노을.png' }).click()
+await page.getByRole('button', { name: '버리기', exact: true }).first().click(); await page.waitForTimeout(600) // photo 2 was only for the blur shot
+const caption = page.getByRole('textbox', { name: '글자 내용' })
+const addText = async (text, preset, font, size, x, y) => {
+  await page.getByRole('button', { name: '글자 넣기' }).click()
+  await caption.waitFor(); await page.waitForFunction("document.activeElement?.getAttribute('aria-label') === '글자 내용'")
+  await page.keyboard.type(text)
+  await page.getByRole('button', { name: `스타일: ${preset}` }).click()
+  await page.getByRole('combobox', { name: '글꼴' }).selectOption(font); await page.waitForTimeout(300)
+  if (await open.getAttribute('aria-expanded') !== 'true') await open.click()
+  await field('글자 크기', size); await field('중심 X', x); await field('중심 Y', y)
+}
+await addText('오늘의 노을', '그림자만', 'jua', 150, 800, 260)
+await addText('2026. 11 · 한강 산책', '반투명 검은 상자', 'pretendard', 52, 800, 930)
+await open.click()
+await page.getByRole('button', { name: /^글자 1:/ }).click()
+await page.evaluate('document.activeElement?.blur()')
+await page.mouse.move(W / 2, H - 60); await page.waitForTimeout(500)
+await shot('text.png')
 await page.getByRole('tab', { name: '스티커' }).click()
 await page.keyboard.press('Escape')
 // GIF from a short synthetic clip (pan over the park picture).
@@ -76,6 +95,6 @@ await page.getByRole('spinbutton', { name: '끝 시간' }).fill('4.5'); await pa
 await page.waitForTimeout(800)
 await shot('gif.png')
 await app.evaluate(({ app }) => app.exit(0)).catch(() => {})
-for (const name of ['edit', 'blur', 'gif']) spawnSync('sips', ['-Z', '1600', join(OUT, name + '.png'), '--out', resolve(ROOT, 'docs/images', name + '.png')])
+for (const name of ['edit', 'blur', 'text', 'gif']) spawnSync('sips', ['-Z', '1600', join(OUT, name + '.png'), '--out', resolve(ROOT, 'docs/images', name + '.png')])
 process.stdout.write('done\n')
 process.exit(0)

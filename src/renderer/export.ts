@@ -3,6 +3,8 @@ import type { BlurRegion, StickerInstance } from '../shared/model'
 import { buildRegionPatch, regionPath } from './regions'
 import { renderAdjusted, releaseCanvas } from './filters'
 import { NEUTRAL_ADJUSTMENTS, type Adjustments } from '../shared/filters'
+import type { TextItem } from '../shared/text'
+import { drawText, ensureTextFonts } from './text'
 /** PNG encoding runs in a worker: main-thread canvas encoding waits for idle time and stalled saves for seconds when the window was behind. */
 function encodePng(bitmap: ImageBitmap): Promise<Uint8Array> {
   const worker = new Worker(new URL('./encode-worker.ts', import.meta.url), { type: 'module' })
@@ -13,9 +15,11 @@ function encodePng(bitmap: ImageBitmap): Promise<Uint8Array> {
     worker.postMessage({ bitmap }, [bitmap])
   })
 }
-export async function composePng(photo: ImageBitmap, instances: StickerInstance[], assets: ReadonlyMap<string, { bitmap: ImageBitmap }>, output: OutputSettings = DEFAULT_OUTPUT, regions: BlurRegion[] = [], adjust: Adjustments = NEUTRAL_ADJUSTMENTS): Promise<Uint8Array> {
+export async function composePng(photo: ImageBitmap, instances: StickerInstance[], assets: ReadonlyMap<string, { bitmap: ImageBitmap }>, output: OutputSettings = DEFAULT_OUTPUT, regions: BlurRegion[] = [], adjust: Adjustments = NEUTRAL_ADJUSTMENTS, texts: TextItem[] = []): Promise<Uint8Array> {
+  // Fonts must be ready before drawing, or canvas silently falls back to another face.
+  await ensureTextFonts(texts)
   const canvas = new OffscreenCanvas(1, 1)
-  // Order: adjustments → blur/mosaic (hides adjusted pixels) → stickers (never adjusted).
+  // Order: adjustments → blur/mosaic (hides adjusted pixels) → stickers (never adjusted) → texts.
   const adjusted = renderAdjusted(photo, adjust)
   const base = adjusted ?? photo
   const size = outputSize(photo.width, photo.height, output)
@@ -46,6 +50,13 @@ export async function composePng(photo: ImageBitmap, instances: StickerInstance[
       context.translate(placement.x, placement.y)
       context.rotate(placement.rotation * Math.PI / 180)
       context.drawImage(sticker, -placement.width / 2, -placement.height / 2, placement.width, placement.height)
+      context.restore()
+    }
+    for (const text of texts) {
+      context.save()
+      context.translate(text.x, text.y)
+      context.rotate(text.rotation * Math.PI / 180)
+      drawText(context, text)
       context.restore()
     }
     return await encodePng(canvas.transferToImageBitmap())

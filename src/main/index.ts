@@ -8,7 +8,7 @@ import { imageSize } from 'image-size'
 import { orientThumbnail } from '../shared/thumbnail'
 import { inspectImage, MAX_OUTPUT_BYTES } from './images'
 import { saveUnique, SaveCleanupError } from './files'
-import { trustedSender, validSaveRequest } from './security'
+import { allowedPermission, bundleFileType, trustedSender, validSaveRequest } from './security'
 import { StickerLibrary, readBounded } from './library'
 import { seedDefaultStickers } from './defaults'
 import { OutputStore } from './settings'
@@ -299,14 +299,17 @@ app.whenReady().then(() => {
       return task
     }
     const file = resolve(bundleRoot, '.' + decodeURIComponent(url.pathname))
-    if (url.host !== 'bundle' || !file.startsWith(bundleRoot + sep) || !['.html', '.js', '.css'].includes(extname(file))) return new Response(null, { status: 403 })
+    const mime = bundleFileType(url.pathname, extname(file))
+    if (url.host !== 'bundle' || !file.startsWith(bundleRoot + sep) || !mime) return new Response(null, { status: 403 })
     try {
-      const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' }[extname(file)]!
       return new Response(await readFile(file), { headers: { 'Content-Type': mime } })
     } catch { return new Response(null, { status: 404 }) }
   })
-  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
-  session.defaultSession.setPermissionCheckHandler(() => false)
+  // Everything is denied except reading the installed font list for the text tool.
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) =>
+    callback(!!win && webContents.id === win.webContents.id && details.isMainFrame && allowedPermission(permission, details.requestingUrl, pageUrl)))
+  session.defaultSession.setPermissionCheckHandler((webContents, permission, origin) =>
+    !!win && webContents?.id === win.webContents.id && allowedPermission(permission, origin, pageUrl))
   for (const [channel, action] of [
     ['photo:choose', choosePhotos], ['photo:folder', choosePhotoFolder], ['output:folder', chooseOutputFolder], ['photo:save', save], ['photo:read', (id: string) => photos.read(id)],
     ['photo:drop', dropFiles], ['photo:remove', removePhoto]

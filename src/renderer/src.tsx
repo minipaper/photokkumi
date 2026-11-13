@@ -9,16 +9,29 @@ import { GifMaker } from './GifMaker'
 import type { VideoRef } from '../shared/gif'
 import type { UpdateState } from '../shared/update'
 import { loadPref, savePref } from './remember'
+import { TextPanel } from './TextPanel'
+import { ensureFont, listSystemFonts, withMeasuredSize } from './text'
+import { DEFAULT_TEXT, DEFAULT_TEXT_STYLE, MAX_TEXTS, validFontSize, validTextStyle, type TextItem, type TextStyle } from '../shared/text'
 const validRegionEffect = (value: unknown): value is { style: 'blur' | 'mosaic'; strength: number; shape: 'ellipse' | 'rect' } => {
   const v = value as Record<string, unknown> | null
   return !!v && typeof v === 'object' && ['blur', 'mosaic'].includes(v.style as string) && typeof v.strength === 'number' && validStrength(v.strength) && ['ellipse', 'rect'].includes(v.shape as string)
 }
-import { addInstance, addRegion, clearRegions, setAdjustments, updateSelectedRegion, validStrength, updateSelected, removeSelected, duplicateSelected, reorderSelected, emptyHistory, commitScene, undoScene, redoScene, MAX_INSTANCES, MAX_DECODED_STICKER_PIXELS, type Scene, type SceneHistory } from '../shared/scene'
+import { addInstance, addRegion, addText, clearRegions, clearTexts, updateSelectedText, setAdjustments, updateSelectedRegion, validStrength, updateSelected, removeSelected, duplicateSelected, reorderSelected, emptyHistory, commitScene, undoScene, redoScene, MAX_INSTANCES, MAX_DECODED_STICKER_PIXELS, type Scene, type SceneHistory } from '../shared/scene'
 import { createPhotoSession, editPhotoSession, savePhotoSession, discardPhotoSession, sessionAssets, type PhotoSession } from '../shared/photo-session'
 import { DEFAULT_OUTPUT, validOutput, outputSize, outputKey, type OutputSettings } from '../shared/output'
 import { composePng } from './export'
 import { ADJUSTMENT_KEYS, isNeutral, sameAdjustments, NEUTRAL_ADJUSTMENTS, type Adjustments } from '../shared/filters'
 import './style.css'
+const validTextDefaults = (value: unknown): value is { style: TextStyle; relSize: number } => {
+  const v = value as Record<string, unknown> | null
+  return !!v && typeof v === 'object' && validTextStyle(v.style) && typeof v.relSize === 'number' && v.relSize > 0 && v.relSize <= 1
+}
+/** Which side tab edits the selected item. */
+function selectedKind(scene: Scene): 'stickers' | 'regions' | 'text' | null {
+  const id = scene.selectedId
+  if (!id) return null
+  return scene.texts.some(item => item.id === id) ? 'text' : scene.regions.some(item => item.id === id) ? 'regions' : scene.stickers.some(item => item.id === id) ? 'stickers' : null
+}
 
 declare global { interface Window { photokkumi: PhotoApi } }
 interface DecodedAsset extends Omit<ImageAsset, 'bytes'> { bitmap: ImageBitmap }
@@ -64,11 +77,20 @@ function App() {
   const scene = history.present
   const placement = scene.stickers.find(item => item.id === scene.selectedId) ?? null
   const region = scene.regions.find(item => item.id === scene.selectedId) ?? null
-  const selection: Placement | null = placement ?? region
+  const textItem = scene.texts.find(item => item.id === scene.selectedId) ?? null
+  const selection: Placement | null = placement ?? region ?? textItem
   type RegionEffect = { style: RegionStyle; strength: number; shape: RegionShape }
   const [regionDefaults, setRegionDefaults] = useState<RegionEffect>(() => loadPref('pk.regionDefaults', { style: 'blur', strength: 50, shape: 'ellipse' }, validRegionEffect))
   const liveBase = useRef<Scene | null>(null)
-  const [sideTab, setSideTab] = useState<'stickers' | 'regions' | 'adjust'>('stickers')
+  type SideTab = 'stickers' | 'regions' | 'adjust' | 'text'
+  const [sideTab, setSideTab] = useState<SideTab>('stickers')
+  // Look of the next text; relSize is the font size relative to the photo's short edge so captions match across photos.
+  type TextDefaults = { style: TextStyle; relSize: number }
+  const [textDefaults, setTextDefaults] = useState<TextDefaults>(() => loadPref('pk.textDefaults', { style: { ...DEFAULT_TEXT_STYLE }, relSize: 0.08 }, validTextDefaults))
+  const [systemFonts, setSystemFonts] = useState<string[] | null>(null)
+  const textArea = useRef<HTMLTextAreaElement>(null)
+  const focusNewText = useRef(false)
+  useEffect(() => { if (sideTab === 'text' && systemFonts === null) void listSystemFonts().then(setSystemFonts) }, [sideTab, systemFonts])
   const [mode, setMode] = useState<'photo' | 'gif'>('photo')
   // The region tab is the blur/mosaic tool: it stays on until another tab, Esc or the toolbar button.
   const drawMode = sideTab === 'regions' && mode === 'photo' && !!photo
@@ -80,6 +102,14 @@ function App() {
   const referencedAssetsForCurrent = activeSession ? sessionAssets(activeSession) : []
   const referencedIds = [...new Set([...sessions.current.values()].flatMap(sessionAssets))]
   const [busy, setBusy] = useState(false)
+  // Type right away into a new text: the placeholder is selected so the first keystroke replaces it.
+  // Runs once the add operation has finished, because the textarea is disabled while busy.
+  useEffect(() => {
+    const input = textArea.current
+    if (!focusNewText.current || busy || !input || input.disabled) return
+    focusNewText.current = false
+    input.focus(); input.select()
+  }, [busy, history])
   const operation = useRef(false)
   const [status, setStatus] = useState('사진을 열어 시작하세요.')
   const [error, setError] = useState('')
@@ -178,11 +208,65 @@ function App() {
     } catch (value) { setError(value instanceof Error ? value.message : '영역을 만들 수 없습니다.') }
   }
   /** Switching tools drops a selection that belongs to the other layer. */
-  function openTab(tab: 'stickers' | 'regions' | 'adjust') {
+  function openTab(tab: SideTab) {
     const current = currentHistory.current.present
-    const onRegion = current.regions.some(item => item.id === current.selectedId)
-    if (current.selectedId && (tab === 'regions') !== onRegion) selectInstance(null)
+    const kind = selectedKind(current)
+    // The adjust tab keeps a sticker/text selection (as before); the other tabs only keep their own kind.
+    if (kind && (tab === 'adjust' ? kind === 'regions' : kind !== tab)) selectInstance(null)
     setSideTab(tab)
+  }
+  /** Selecting on the canvas brings up the tab that edits that item. */
+  function selectFromCanvas(id: string | null) {
+    selectInstance(id)
+    const current = currentHistory.current.present
+    if (!id || sideTab === 'adjust') return
+    if (current.texts.some(item => item.id === id)) setSideTab('text')
+    else if (current.stickers.some(item => item.id === id)) setSideTab('stickers')
+  }
+  const shortEdge = photo ? Math.min(photo.width, photo.height) : 1000
+  const maxFontSize = Math.max(64, Math.round(shortEdge * 0.5))
+  function rememberText(next: TextDefaults) { setTextDefaults(next); savePref('pk.textDefaults', next) }
+  const addTextItem = () => run(async () => {
+    if (!photo) return
+    const current = currentHistory.current.present
+    if (current.texts.length >= MAX_TEXTS) throw new Error('사진 한 장에는 글자를 최대 50개 넣을 수 있습니다.')
+    await ensureFont(textDefaults.style.font, textDefaults.style.bold)
+    const fontSize = Math.min(maxFontSize, Math.max(8, Math.round(textDefaults.relSize * shortEdge)))
+    // Each new text lands a line below the previous one so they do not pile up.
+    const offset = (current.texts.length % 4) * fontSize * 1.6
+    const measured = withMeasuredSize({ text: DEFAULT_TEXT, fontSize, style: { ...textDefaults.style } })
+    editScene(addText(currentHistory.current.present, { id: crypto.randomUUID(), ...measured, x: photo.width / 2, y: Math.min(photo.height, photo.height / 2 + offset), rotation: 0 }))
+    setSideTab('text')
+    setStatus('글자를 추가했습니다. 오른쪽 입력칸에 내용을 쓰고, 사진 위에서 옮기거나 모서리로 크기를 바꾸세요.')
+    focusNewText.current = true
+  })
+  /** Re-measures the selected text after a content/size/style change; live edits merge into one undo step. */
+  function changeText(change: Partial<Pick<TextItem, 'text' | 'fontSize' | 'style'>>, live = false) {
+    const current = currentHistory.current.present
+    const item = current.texts.find(text => text.id === current.selectedId)
+    if (!item) return
+    const measured = withMeasuredSize({ text: item.text, fontSize: item.fontSize, style: item.style, ...change })
+    const next = updateSelectedText(current, measured)
+    if (live) liveEdit(next); else editScene(next)
+  }
+  function changeTextStyle(patch: Partial<TextStyle>, live = false) {
+    const style = { ...(textItem?.style ?? textDefaults.style), ...patch }
+    if (!validTextStyle(style)) return
+    rememberText({ ...textDefaults, style })
+    // Without a selection only the defaults change; load the face so the input preview shows it.
+    if (!textItem) { void ensureFont(style.font, style.bold).catch(() => undefined); return }
+    const id = textItem.id
+    if (patch.font === undefined && patch.bold === undefined) { changeText({ style }, live); return }
+    // A new face must be loaded before measuring, or the box would fit the fallback font.
+    void run(async () => {
+      await ensureFont(style.font, style.bold)
+      if (currentHistory.current.present.selectedId === id) changeText({ style })
+    })
+  }
+  function changeFontSize(size: number, live = false) {
+    if (!textItem || !validFontSize(size)) return
+    rememberText({ ...textDefaults, relSize: Math.min(1, size / shortEdge) })
+    changeText({ fontSize: size }, live)
   }
   function selectInstance(id: string | null) {
     if (operation.current || currentHistory.current.present.selectedId === id) return
@@ -291,6 +375,7 @@ function App() {
         && (target.isContentEditable || target.closest('input, textarea, select, dialog, [role="textbox"]')))) return
     if (event.key === 'Escape' && drawMode) { event.preventDefault(); openTab('stickers'); return }
     if (photo && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.key.toLowerCase() === 'b' && !event.repeat) { event.preventDefault(); openTab(sideTab === 'regions' ? 'stickers' : 'regions'); return }
+    if (photo && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.key.toLowerCase() === 't' && !event.repeat && !drawMode) { event.preventDefault(); void addTextItem(); return }
     if (event.ctrlKey || event.metaKey) {
       const key = event.key.toLowerCase()
       if (!photo || !['z', 'y', 'd'].includes(key)) return
@@ -302,7 +387,7 @@ function App() {
       return
     }
     const current = currentHistory.current.present
-    const selected = [...current.stickers, ...current.regions].find(item => item.id === current.selectedId)
+    const selected = [...current.stickers, ...current.regions, ...current.texts].find(item => item.id === current.selectedId)
     if (!selected) return
     if (event.key === 'Delete' || event.key === 'Backspace') {
       event.preventDefault()
@@ -320,7 +405,7 @@ function App() {
   }
   const duplicate = () => run(async () => { editScene(duplicateSelected(currentHistory.current.present, crypto.randomUUID())) })
   const clearScene = () => {
-    if (!window.confirm('사진의 모든 스티커와 실행취소 이력을 비울까요? 이 작업은 실행 취소할 수 없습니다.')) return
+    if (!window.confirm('사진의 모든 스티커·가림·글자와 실행취소 이력을 비울까요? 이 작업은 실행 취소할 수 없습니다.')) return
     const next = emptyHistory()
     applyHistory(next)
   }
@@ -415,10 +500,13 @@ function App() {
     if (!photo) return false
     if (!outputLoaded) throw new Error('출력 설정을 불러온 뒤 저장할 수 있습니다.')
     outputSize(photo.width, photo.height, output)
+    // Typing or a slider drag still in progress becomes its undo step now, not after the save marks the photo clean.
+    commitLive()
     setStatus('저장 중…')
     const persisted = await window.photokkumi.updateOutputSettings(output)
     if (!persisted.ok) throw new Error(persisted.error)
-    const png = await composePng(photo.bitmap, currentHistory.current.present.stickers, assets.current, output, currentHistory.current.present.regions, currentHistory.current.present.adjust)
+    const present = currentHistory.current.present
+    const png = await composePng(photo.bitmap, present.stickers, assets.current, output, present.regions, present.adjust, present.texts)
     const result = await window.photokkumi.saveImage({ photoId: photo.id, png, output })
     if (!result.ok) throw new Error(result.error)
     if (!result.value) { setStatus('저장이 취소되었습니다. 편집 내용은 유지됩니다.'); return false }
@@ -503,7 +591,7 @@ function App() {
               {region ? <>
                 <label>너비<input aria-label="영역 너비" type="number" min="1" max="32768" value={Math.round(region.width)} onChange={e => change({ ...region, width: e.target.valueAsNumber })} /></label>
                 <label>높이<input aria-label="영역 높이" type="number" min="1" max="32768" value={Math.round(region.height)} onChange={e => change({ ...region, height: e.target.valueAsNumber })} /></label>
-              </> : <label>너비<input aria-label="스티커 너비" type="number" min="1" max="32768" value={Math.round(selection.width)} onChange={e => change({ ...selection, width: e.target.valueAsNumber, height: e.target.valueAsNumber * selection.height / selection.width })} /></label>}
+              </> : textItem ? null : <label>너비<input aria-label="스티커 너비" type="number" min="1" max="32768" value={Math.round(selection.width)} onChange={e => change({ ...selection, width: e.target.valueAsNumber, height: e.target.valueAsNumber * selection.height / selection.width })} /></label>}
               <label>회전<input aria-label="회전" type="number" value={Math.round(selection.rotation)} onChange={e => change({ ...selection, rotation: e.target.valueAsNumber })} /></label>
             </fieldset>}
   </div> : null
@@ -576,6 +664,9 @@ function App() {
         <button className="draw-toggle" aria-label="블러·모자이크" aria-pressed={drawMode} disabled={busy || !photo} title="블러·모자이크 도구 (B) — 켜 둔 채로 여러 곳을 연속으로 가릴 수 있습니다" onClick={() => openTab(sideTab === 'regions' ? 'stickers' : 'regions')}>
           <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="2.4 1.8"><ellipse cx="8" cy="8" rx="6.5" ry="5.5" /></svg><span className="label"> 블러·모자이크</span><span className="label-short"> 블러</span>
         </button>
+        <button className="text-toggle" aria-label="글자 넣기" disabled={busy || !photo} title="글자 넣기 (T) — 사진 가운데에 글자를 추가합니다" onClick={() => void addTextItem()}>
+          <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M3 3.5h10M8 3.5v10"/></svg><span className="label"> 글자</span>
+        </button>
       </div>
       <div className="toolbar-spacer" />
       <div className="settings-anchor" ref={settingsAnchor}>
@@ -614,8 +705,8 @@ function App() {
     </div>
     <section className="workspace" hidden={mode !== 'photo'}>
       <div className="canvas-column">
-        {photo ? <EditorCanvas key={photo.id} photo={photo} assets={assets.current} scene={scene} disabled={busy} onSelect={selectInstance} onChange={(id, value) => change(value, id)} selectionTools={editTools}
-          drawMode={drawMode} drawShape={regionDefaults.shape} onDraw={drawRegion}
+        {photo ? <EditorCanvas key={photo.id} photo={photo} assets={assets.current} scene={scene} disabled={busy} onChange={(id, value) => change(value, id)} selectionTools={editTools}
+          drawMode={drawMode} drawShape={regionDefaults.shape} onDraw={drawRegion} onSelect={selectFromCanvas}
           info={<>{photo.name} · {photo.width} × {photo.height} px{outputLabel && outputLabel !== `${photo.width} × ${photo.height} px` ? ` → ${outputLabel}` : ''} · <b className={dirty ? 'dirty' : ''}>{dirty ? '수정됨' : '원본 / 저장됨'}</b></>} />
           : <div className="empty"><div className="drop-target"><strong>사진을 이 창으로 끌어다 놓으세요</strong><span>탐색기에서 JPG·PNG 사진 여러 장이나 폴더를 한 번에 끌어 놓으면 바로 불러옵니다.</span><span>또는 위의 <b>사진 열기</b> · <b>폴더 열기</b></span></div></div>}
       </div>
@@ -623,6 +714,7 @@ function App() {
         <div className="side-tabs" role="tablist" aria-label="편집 패널">
           <button role="tab" aria-selected={sideTab === 'stickers'} onClick={() => openTab('stickers')}>스티커</button>
           <button role="tab" aria-selected={sideTab === 'regions'} onClick={() => openTab('regions')}>가림{!!scene.regions.length && <span className="tab-count">{scene.regions.length}</span>}</button>
+          <button role="tab" aria-selected={sideTab === 'text'} onClick={() => openTab('text')}>글자{!!scene.texts.length && <span className="tab-count">{scene.texts.length}</span>}</button>
           <button role="tab" aria-selected={sideTab === 'adjust'} onClick={() => openTab('adjust')}>보정{!isNeutral(scene.adjust) && <span className="tab-dot" aria-label="(적용됨)" />}</button>
         </div>
         {sideTab === 'regions' ? <section className="region-panel" aria-label="블러·모자이크">
@@ -654,7 +746,12 @@ function App() {
               onClick={() => selectInstance(item.id)}>{item.shape === 'rect' ? '▭' : '◯'} {item.style === 'blur' ? '블러' : '모자이크'} {index + 1}</button>)}
           </div>}
           {region ? numericFields : <p className="hint">{photo ? '켜 둔 채로 여러 곳을 연속으로 가릴 수 있습니다. 빈 곳을 드래그하면 새 영역, 영역을 누르면 선택됩니다. Shift는 정원·정사각형, 사진 밖에서 드래그를 시작하면 사진 끝에 딱 맞춰집니다. Esc나 B로 도구를 끕니다.' : '사진을 열면 블러·모자이크로 가릴 수 있습니다.'}</p>}
-        </section> : sideTab === 'adjust' ? <section className="adjust-panel" aria-label="사진 보정">
+        </section> : sideTab === 'text' ? <TextPanel photoOpen={!!photo} busy={busy} texts={scene.texts} selected={textItem}
+          style={textItem?.style ?? textDefaults.style} fontSize={textItem?.fontSize ?? null} maxFontSize={maxFontSize} systemFonts={systemFonts} textArea={textArea}
+          onAdd={() => void addTextItem()} onSelect={selectInstance} onText={text => changeText({ text }, true)} onStyle={changeTextStyle} onFontSize={changeFontSize}
+          onCommit={commitLive} onClear={() => editScene(clearTexts(currentHistory.current.present))}>
+          {textItem ? numericFields : <p className="hint">{photo ? '글자를 누르면 선택됩니다. 모서리를 끌면 크기, 위쪽 핸들로 회전합니다. 방향키 1px, Shift+방향키 10px 이동.' : ''}</p>}
+        </TextPanel> : sideTab === 'adjust' ? <section className="adjust-panel" aria-label="사진 보정">
           {ADJUSTMENT_KEYS.map(key => {
             const label = { exposure: '노출', contrast: '대비', saturation: '채도', temperature: '색온도' }[key]
             return <div key={key} className={`adjust-row ${key}`}>
@@ -676,7 +773,7 @@ function App() {
         {photo && <section className="placed" aria-label="올린 항목">
           <div className="pane-heading">
             <h2>올린 스티커 <small><span data-testid="instance-count">{scene.stickers.length}</span></small></h2>
-            <button className="link" disabled={busy || !(referencedAssetsForCurrent.length || scene.regions.length || history.past.length || history.future.length)} onClick={clearScene}>배치·이력 비우기</button>
+            <button className="link" disabled={busy || !(referencedAssetsForCurrent.length || scene.regions.length || scene.texts.length || history.past.length || history.future.length)} onClick={clearScene}>배치·이력 비우기</button>
           </div>
           {!!scene.stickers.length && <div className="instance-list" aria-label="사진의 스티커 목록">
             {scene.stickers.map((item, index) => <button key={item.id} disabled={busy}
@@ -709,7 +806,7 @@ function App() {
         })}
       </div>
     </section>}
-    <footer className="statusbar"><p role="status" aria-live="polite">{status || (mode === 'photo' && photo ? <span className="shortcuts">Ctrl+S 저장 · Ctrl+Z 실행 취소 · Ctrl+D 복제 · Delete 삭제 · B 블러·모자이크 · Ctrl+휠 확대</span> : '')}</p>{error && !libraryOpen && !pendingPhoto && <p role="alert">{error}</p>}
+    <footer className="statusbar"><p role="status" aria-live="polite">{status || (mode === 'photo' && photo ? <span className="shortcuts">Ctrl+S 저장 · Ctrl+Z 실행 취소 · Ctrl+D 복제 · Delete 삭제 · B 블러·모자이크 · T 글자 · Ctrl+휠 확대</span> : '')}</p>{error && !libraryOpen && !pendingPhoto && <p role="alert">{error}</p>}
       <div className="update-area" role="group" aria-label="업데이트">
         {update?.status === 'available' && dismissedUpdate !== update.version && <>
           <span className="update-note">새 버전 {update.version}</span>

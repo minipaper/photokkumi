@@ -1264,6 +1264,69 @@ test('보정은 사진에만 적용되고 슬라이더 1회 undo·초기화·모
   expect(errors).toEqual([])
 })
 
+test('글자: T키·패널 입력·내장 글꼴·배경 상자·크기 undo·키보드 삭제와 미리보기·저장 픽셀이 일치한다', async () => {
+  await select(source); await page.getByRole('button', { name: '사진 열기', exact: true }).click()
+  await expect(page.getByRole('button', { name: '저장하고 다음' })).toBeEnabled()
+  await page.getByTestId('canvas-area').click({ position: { x: 4, y: 4 } })
+  await page.keyboard.press('t')
+  const input = page.getByRole('textbox', { name: '글자 내용' })
+  // The placeholder text is selected, so typing replaces it.
+  await expect(input).toBeFocused()
+  await page.keyboard.type('가나')
+  await expect(input).toHaveValue('가나')
+  await expect(page.getByTestId('text-count')).toHaveText('1')
+  await expect(page.getByRole('tab', { name: /글자/ })).toHaveAttribute('aria-selected', 'true')
+  await page.getByRole('combobox', { name: '글꼴' }).selectOption('blackhansans')
+  await expect.poll(() => page.evaluate(() => document.fonts.check('400 20px "PK blackhansans"'))).toBe(true)
+  await page.getByLabel('글자색', { exact: true }).fill('#ff0000')
+  await page.getByLabel('배경 상자 색', { exact: true }).fill('#ff0000')
+  await page.getByRole('slider', { name: '배경 불투명도' }).fill('100')
+  await page.getByRole('slider', { name: '외곽선 두께' }).fill('0')
+  // Default size is 8% of the short edge (800 px).
+  expect(await value('글자 크기')).toBe(64)
+  await field('글자 크기', 100)
+  await page.getByRole('button', { name: '실행 취소', exact: true }).click()
+  expect(await value('글자 크기')).toBe(64)
+  await page.getByRole('button', { name: '다시 실행', exact: true }).click()
+  expect(await value('글자 크기')).toBe(100)
+  await field('중심 X', 300); await field('중심 Y', 200)
+  await expect(input).toHaveValue('가나')
+
+  // Preview and export draw with the same function: the box center is solid red in both.
+  await expect.poll(() => page.evaluate(() => {
+    const canvas = document.querySelector('[data-testid=photo-content]') as HTMLCanvasElement
+    const scale = Number((document.querySelector('[data-testid=canvas-frame]') as HTMLElement).dataset.scale), ratio = canvas.width / canvas.clientWidth
+    return [...canvas.getContext('2d')!.getImageData(Math.round(300 * scale * ratio), Math.round(200 * scale * ratio), 1, 1).data]
+  })).toEqual([255, 0, 0, 255])
+  await save()
+  const result = await output()
+  expect(pixel(result, 300, 200)).toEqual([255, 0, 0, 255])
+  expect(pixel(result, 300, 250)).toEqual([255, 0, 0, 255])
+  expect(pixel(result, 300, 330)).toEqual([20, 40, 200, 255])
+  expect(pixel(result, 900, 600)).toEqual([20, 40, 200, 255])
+
+  await page.getByRole('button', { name: '글자 1: 가나', exact: true }).click()
+  await page.keyboard.press('Delete')
+  await expect(page.getByTestId('text-count')).toHaveText('0')
+  // The chip that had focus is gone with the last text; editing shortcuts live on the canvas.
+  await page.getByTestId('canvas-area').click({ position: { x: 4, y: 4 } })
+  await page.keyboard.press('ControlOrMeta+z')
+  await expect(page.getByTestId('text-count')).toHaveText('1')
+  // Saving while still typing keeps the photo clean after the textarea loses focus.
+  await page.getByRole('button', { name: '글자 1: 가나', exact: true }).click()
+  await input.click(); await page.keyboard.press('End'); await page.keyboard.type('다')
+  await save()
+  await page.getByTestId('canvas-area').click({ position: { x: 4, y: 4 } })
+  await expect(page.locator('.canvas-info b')).toHaveText('원본 / 저장됨')
+  await page.keyboard.press('ControlOrMeta+z')
+  await expect(page.getByTestId('text-count')).toHaveText('1')
+  await page.getByRole('button', { name: /^글자 1:/ }).click()
+  await expect(input).toHaveValue('가나')
+  // Installed fonts are listed after the bundled ones.
+  await expect(page.getByRole('combobox', { name: '글꼴' }).locator('optgroup').last()).toHaveAttribute('label', /^내 PC 글꼴 [1-9]\d*개$/)
+  expect(errors).toEqual([])
+})
+
 function findFfmpeg() {
   const { spawnSync } = process.getBuiltinModule('node:child_process') as typeof import('node:child_process')
   for (const candidate of [process.env.FFMPEG_PATH, 'ffmpeg', '/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg'].filter(Boolean) as string[]) {

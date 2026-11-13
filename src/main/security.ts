@@ -3,6 +3,18 @@ import type { SaveRequest } from '../shared/model'
 export function trustedSender(senderId: number, expectedId: number, isMainFrame: boolean, url: string, allowedUrl: string) {
   return senderId === expectedId && isMainFrame && url === allowedUrl
 }
+/** Only the PC font list (Local Font Access) is granted, and only to the app page itself. */
+export function allowedPermission(permission: string, origin: string, allowedUrl: string): boolean {
+  if (permission !== 'local-fonts') return false
+  // URL.origin is 'null' for custom schemes such as app://, so compare scheme and host explicitly.
+  try { const from = new URL(origin), page = new URL(allowedUrl); return from.protocol === page.protocol && from.host === page.host && !!page.host } catch { return false }
+}
+const BUNDLE_TYPES: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' }
+const FONT_TYPES: Record<string, string> = { '.woff2': 'font/woff2', '.ttf': 'font/ttf' }
+/** MIME type for a file served from the renderer bundle; fonts only from /fonts/. null = refuse. */
+export function bundleFileType(pathname: string, extension: string): string | null {
+  return BUNDLE_TYPES[extension] ?? (pathname.startsWith('/fonts/') ? FONT_TYPES[extension] ?? null : null)
+}
 export function validSaveRequest(value: unknown): value is SaveRequest {
   if (!value || typeof value !== 'object') return false
   const request = value as Record<string, unknown>

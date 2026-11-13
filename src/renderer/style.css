@@ -151,7 +151,7 @@ aside {
   flex: none; width: 288px; display: flex; flex-direction: column; min-height: 0; overflow: hidden;
   background: var(--surface); border-left: 1px solid var(--line);
 }
-.side-tabs { flex: none; display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--line); }
+.side-tabs { flex: none; display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 1px solid var(--line); }
 .side-tabs button { height: 38px; border: 0; border-radius: 0; background: none; color: var(--muted); font-weight: 600; border-bottom: 2px solid transparent; }
 .side-tabs button[aria-selected=true] { color: var(--accent); border-bottom-color: var(--accent); }
 .side-tabs button:hover:not(:disabled) { background: var(--surface-2); }
@@ -208,6 +208,29 @@ button.disclosure:hover { color: var(--text); background: none; }.region-panel {
 .segmented button { height: 26px; border: 0; background: none; font-size: 12px; }
 .segmented button[aria-checked=true] { background: var(--surface); color: var(--accent); font-weight: 600; box-shadow: 0 1px 3px #1a1f2b26; }
 .instance-list .region-chip { border-style: dashed; }
+/* Text tab: compact rows so the whole panel fits the 580px minimum window without scrolling. */
+/* Only at the minimum window with numeric fields open does this (non-nested) panel scroll. */
+.text-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; overflow-y: auto; }
+.text-add { display: flex; align-items: center; gap: 8px; }
+.text-add button { flex: none; height: 30px; }
+.text-add .hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.text-panel textarea { flex: none; width: 100%; min-height: 44px; max-height: 72px; resize: vertical; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: var(--radius); font-size: 15px; line-height: 1.3; background: var(--surface); color: var(--text); }
+.text-panel textarea:disabled { background: var(--surface-2); }
+.text-presets { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.text-presets .preset { height: 30px; padding: 0; display: flex; align-items: center; justify-content: center; border-color: var(--line); background: linear-gradient(135deg, #7d9cc4 0%, #b8a07c 55%, #e9e2d3 100%); }
+.text-presets .preset span { padding: 0 4px; border-radius: 4px; font-size: 16px; font-weight: 800; line-height: 1.25; paint-order: stroke fill; }
+.text-presets .preset:hover:not(:disabled) { border-color: var(--accent); }
+.text-fields { gap: 6px; grid-template-columns: minmax(0, 1fr); }
+.text-fields > * { min-width: 0; }
+.text-fields select { flex: 1; min-width: 0; height: 28px; margin-left: 8px; }
+.text-fields .field-row { justify-content: flex-start; }
+.text-fields .field-row .segmented.three { flex: 0 0 auto; grid-template-columns: repeat(3, 30px); }
+.text-fields .field-row .color-label { margin-left: auto; }
+.text-fields .field-row { gap: 5px; }
+.text-fields .slider-value { flex: none; width: 22px; text-align: right; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--muted); }
+.bold-toggle { flex: none; width: 30px; height: 28px; padding: 0; font-size: 14px; }
+input.color { flex: none; width: 30px; height: 26px; padding: 2px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); cursor: pointer; }
+.text-panel .instance-list { flex: none; max-height: 52px; }
 .toolbar button svg { vertical-align: -2px; }
 .placement-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
 .placement-fields label { justify-content: space-between; color: var(--muted); font-size: 12px; }
@@ -295,12 +318,26 @@ dialog.library-dialog { width: min(860px, 92vw); max-width: 92vw; max-height: 86
   .mode-tabs button { padding: 0 8px; }
   .draw-toggle .label { display: none; }
   .draw-toggle .label-short { display: inline; }
+  .text-toggle .label { display: none; }
+  .text-fields .field-row .segmented.three { grid-template-columns: repeat(3, 24px); }
+  .text-fields .color-label { display: none; }
+  .text-fields .bold-toggle { width: 26px; }
   .toolbar h1 { display: none; }
   .settings-toggle .summary { display: none; }
   aside { width: 248px; }
   .sticker-use img { width: 44px; height: 44px; }
 }
 @media (max-height: 640px) {
+  .text-panel { gap: 6px; padding: 8px 10px; }
+  .text-add .hint { display: none; }
+  .text-panel textarea { min-height: 36px; }
+  .text-presets .preset { height: 26px; }
+  .text-fields { gap: 4px; padding: 6px 8px; }
+  .text-panel textarea { min-height: 32px; padding: 4px 8px; }
+  .text-fields select, .text-fields input[type=number], .text-fields .bold-toggle { height: 25px; }
+  .text-fields input.color { height: 23px; }
+  .text-fields .segmented button { height: 21px; }
+  .text-add button { height: 28px; }
   .photo-item img { height: 28px; }
   .photo-list .nav { height: 44px; }
 }

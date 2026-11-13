@@ -1322,6 +1322,15 @@ test('글자: T키·패널 입력·내장 글꼴·배경 상자·크기 undo·�
   await expect(page.getByTestId('text-count')).toHaveText('1')
   await page.getByRole('button', { name: /^글자 1:/ }).click()
   await expect(input).toHaveValue('가나')
+  // Icon-only buttons keep their icon centered at the normal and the narrow (≤960px) layout.
+  const iconOffsets = () => page.evaluate(() => [...document.querySelectorAll('.text-panel .segmented.three button, .text-panel .bold-toggle')].map(button => {
+    const box = button.getBoundingClientRect(), icon = button.firstElementChild!.getBoundingClientRect()
+    return Math.round(Math.abs(icon.left + icon.width / 2 - (box.left + box.width / 2)))
+  }))
+  expect(Math.max(...await iconOffsets())).toBeLessThanOrEqual(1)
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(760, 580))
+  await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(760)
+  expect(Math.max(...await iconOffsets())).toBeLessThanOrEqual(1)
   // Installed fonts are listed after the bundled ones.
   await expect(page.getByRole('combobox', { name: '글꼴' }).locator('optgroup').last()).toHaveAttribute('label', /^내 PC 글꼴 [1-9]\d*개$/)
   expect(errors).toEqual([])

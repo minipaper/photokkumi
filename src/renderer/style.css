@@ -225,6 +225,8 @@ button.disclosure:hover { color: var(--text); background: none; }.region-panel {
 .text-fields select { flex: 1; min-width: 0; height: 28px; margin-left: 8px; }
 .text-fields .field-row { justify-content: flex-start; }
 .text-fields .field-row .segmented.three { flex: 0 0 auto; grid-template-columns: repeat(3, 30px); }
+/* Icon-only buttons: the default 0 12px button padding would push the 14px icon out to the right of a 24~30px button. */
+.segmented.three button { padding: 0; display: grid; place-items: center; }
 .text-fields .field-row .color-label { margin-left: auto; }
 .text-fields .field-row { gap: 5px; }
 .text-fields .slider-value { flex: none; width: 22px; text-align: right; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--muted); }

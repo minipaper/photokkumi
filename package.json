@@ -1,6 +1,6 @@
 {
   "name": "photokkumi",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "private": true,
   "description": "내 스티커로 꾸미고, 다음 사진으로. 블로그·SNS에 올릴 사진에 스티커를 붙이고, 가릴 곳은 가리고, 크기를 맞춰 저장하는 Windows 앱",
   "main": "out/main/index.js",

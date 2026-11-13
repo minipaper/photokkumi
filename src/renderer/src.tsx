@@ -11,7 +11,7 @@ import type { UpdateState } from '../shared/update'
 import { loadPref, savePref } from './remember'
 import { TextPanel } from './TextPanel'
 import { ensureFont, listSystemFonts, withMeasuredSize } from './text'
-import { DEFAULT_TEXT, DEFAULT_TEXT_STYLE, MAX_TEXTS, validFontSize, validTextStyle, type TextItem, type TextStyle } from '../shared/text'
+import { DEFAULT_TEXT, DEFAULT_TEXT_STYLE, MAX_MY_PRESETS, MAX_TEXTS, samePreset, validFontSize, validMyPresets, validRelSize, validTextStyle, type MyPreset, type TextItem, type TextStyle } from '../shared/text'
 const validRegionEffect = (value: unknown): value is { style: 'blur' | 'mosaic'; strength: number; shape: 'ellipse' | 'rect' } => {
   const v = value as Record<string, unknown> | null
   return !!v && typeof v === 'object' && ['blur', 'mosaic'].includes(v.style as string) && typeof v.strength === 'number' && validStrength(v.strength) && ['ellipse', 'rect'].includes(v.shape as string)
@@ -24,7 +24,7 @@ import { ADJUSTMENT_KEYS, isNeutral, sameAdjustments, NEUTRAL_ADJUSTMENTS, type 
 import './style.css'
 const validTextDefaults = (value: unknown): value is { style: TextStyle; relSize: number } => {
   const v = value as Record<string, unknown> | null
-  return !!v && typeof v === 'object' && validTextStyle(v.style) && typeof v.relSize === 'number' && v.relSize > 0 && v.relSize <= 1
+  return !!v && typeof v === 'object' && validTextStyle(v.style) && validRelSize(v.relSize)
 }
 /** Which side tab edits the selected item. */
 function selectedKind(scene: Scene): 'stickers' | 'regions' | 'text' | null {
@@ -88,6 +88,8 @@ function App() {
   type TextDefaults = { style: TextStyle; relSize: number }
   const [textDefaults, setTextDefaults] = useState<TextDefaults>(() => loadPref('pk.textDefaults', { style: { ...DEFAULT_TEXT_STYLE }, relSize: 0.08 }, validTextDefaults))
   const [systemFonts, setSystemFonts] = useState<string[] | null>(null)
+  const [myPresets, setMyPresets] = useState<MyPreset[]>(() => loadPref('pk.textPresets', [], validMyPresets))
+  function storeMyPresets(next: MyPreset[]) { setMyPresets(next); savePref('pk.textPresets', next) }
   const textArea = useRef<HTMLTextAreaElement>(null)
   const focusNewText = useRef(false)
   useEffect(() => { if (sideTab === 'text' && systemFonts === null) void listSystemFonts().then(setSystemFonts) }, [sideTab, systemFonts])
@@ -263,6 +265,24 @@ function App() {
       if (currentHistory.current.present.selectedId === id) changeText({ style })
     })
   }
+  /** Saves the look in the panel (selected text, else the defaults) as "내 스타일"; content is not part of it. */
+  function saveMyPreset() {
+    const preset = { style: { ...(textItem?.style ?? textDefaults.style) }, relSize: textItem ? Math.min(1, textItem.fontSize / shortEdge) : textDefaults.relSize }
+    if (myPresets.some(item => samePreset(item, preset))) { setStatus('같은 스타일이 이미 내 스타일에 있습니다.'); return }
+    if (myPresets.length >= MAX_MY_PRESETS) return
+    storeMyPresets([{ id: crypto.randomUUID(), ...preset }, ...myPresets])
+    setStatus('지금 스타일을 내 스타일에 저장했습니다. 다시 실행해도 남아 있습니다.')
+  }
+  /** Applies a saved look including font and size (size follows the photo's short edge). */
+  function applyMyPreset(preset: MyPreset) {
+    rememberText({ style: { ...preset.style }, relSize: preset.relSize })
+    const id = textItem?.id
+    void run(async () => {
+      await ensureFont(preset.style.font, preset.style.bold)
+      if (!id || currentHistory.current.present.selectedId !== id) return
+      changeText({ style: { ...preset.style }, fontSize: Math.min(maxFontSize, Math.max(8, Math.round(preset.relSize * shortEdge))) })
+    })
+  }
   function changeFontSize(size: number, live = false) {
     if (!textItem || !validFontSize(size)) return
     rememberText({ ...textDefaults, relSize: Math.min(1, size / shortEdge) })
@@ -365,7 +385,11 @@ function App() {
   function change(value: Placement, id = selection ? scene.selectedId ?? undefined : undefined) {
     if (!id || !validPlacement(value)) return
     const current = currentHistory.current.present
-    editScene(updateSelected({ ...current, selectedId: id }, value))
+    const next = updateSelected({ ...current, selectedId: id }, value)
+    editScene(next)
+    // A text resized with the handles makes its size the default for the next text (like the size field does).
+    const before = current.texts.find(item => item.id === id), after = next.texts.find(item => item.id === id)
+    if (before && after && after.fontSize !== before.fontSize) rememberText({ ...textDefaults, relSize: Math.min(1, after.fontSize / shortEdge) })
   }
   function handleEditorKey(event: KeyboardEvent<HTMLElement>) {
     const target = event.target
@@ -748,6 +772,7 @@ function App() {
           {region ? numericFields : <p className="hint">{photo ? '켜 둔 채로 여러 곳을 연속으로 가릴 수 있습니다. 빈 곳을 드래그하면 새 영역, 영역을 누르면 선택됩니다. Shift는 정원·정사각형, 사진 밖에서 드래그를 시작하면 사진 끝에 딱 맞춰집니다. Esc나 B로 도구를 끕니다.' : '사진을 열면 블러·모자이크로 가릴 수 있습니다.'}</p>}
         </section> : sideTab === 'text' ? <TextPanel photoOpen={!!photo} busy={busy} texts={scene.texts} selected={textItem}
           style={textItem?.style ?? textDefaults.style} fontSize={textItem?.fontSize ?? null} maxFontSize={maxFontSize} systemFonts={systemFonts} textArea={textArea}
+          myPresets={myPresets} onSaveMine={saveMyPreset} onApplyMine={applyMyPreset} onDeleteMine={id => storeMyPresets(myPresets.filter(item => item.id !== id))}
           onAdd={() => void addTextItem()} onSelect={selectInstance} onText={text => changeText({ text }, true)} onStyle={changeTextStyle} onFontSize={changeFontSize}
           onCommit={commitLive} onClear={() => editScene(clearTexts(currentHistory.current.present))}>
           {textItem ? numericFields : <p className="hint">{photo ? '글자를 누르면 선택됩니다. 모서리를 끌면 크기, 위쪽 핸들로 회전합니다. 방향키 1px, Shift+방향키 10px 이동.' : ''}</p>}

@@ -1336,6 +1336,55 @@ test('글자: T키·패널 입력·내장 글꼴·배경 상자·크기 undo·�
   expect(errors).toEqual([])
 })
 
+test('글자 스타일: 빠른 스타일 21개·글꼴 템플릿·내 스타일 저장/적용/삭제, 마지막 스타일·크기가 재실행 후 유지된다', async () => {
+  await select(source); await page.getByRole('button', { name: '사진 열기', exact: true }).click()
+  await expect(page.getByRole('button', { name: '저장하고 다음' })).toBeEnabled()
+  await page.getByRole('button', { name: '글자 넣기' }).click()
+  await expect(page.getByRole('textbox', { name: '글자 내용' })).toBeFocused()
+  await expect(page.getByRole('button', { name: /^스타일: / })).toHaveCount(21)
+  // A template also picks its font; a color look keeps it.
+  await page.getByRole('button', { name: '스타일: 예능 자막 (검은고딕)' }).click()
+  await expect(page.getByRole('combobox', { name: '글꼴' })).toHaveValue('blackhansans')
+  await page.getByRole('button', { name: '스타일: 빨강 + 흰 외곽선' }).click()
+  await expect(page.getByRole('combobox', { name: '글꼴' })).toHaveValue('blackhansans')
+  await expect(page.getByLabel('글자색', { exact: true })).toHaveValue('#ff3b30')
+  await field('글자 크기', 120)
+  await page.getByRole('button', { name: '지금 스타일을 내 스타일로 저장' }).click()
+  await expect(page.getByRole('button', { name: '내 스타일 1', exact: true })).toBeVisible()
+  // Saving the same look twice keeps one.
+  await page.getByRole('button', { name: '지금 스타일을 내 스타일로 저장' }).click()
+  await expect(page.getByRole('button', { name: /^내 스타일 \d+$/ })).toHaveCount(1)
+  // Other look on the text, then the saved one brings back font, color and size.
+  await page.getByRole('button', { name: '스타일: 말풍선 (동글)' }).click()
+  await field('글자 크기', 60)
+  await expect(page.getByRole('combobox', { name: '글꼴' })).toHaveValue('dongle')
+  await page.getByRole('button', { name: '내 스타일 1', exact: true }).click()
+  await expect(page.getByRole('combobox', { name: '글꼴' })).toHaveValue('blackhansans')
+  await expect(page.getByLabel('글자색', { exact: true })).toHaveValue('#ff3b30')
+  expect(await value('글자 크기')).toBe(120)
+
+  await relaunch({})
+  await page.getByRole('tab', { name: /글자/ }).click()
+  // The hint beside the add button is not cut off.
+  const hint = page.locator('.text-add .hint')
+  await expect(hint).toHaveText('사진을 먼저 열어 주세요')
+  expect(await hint.evaluate(element => element.scrollHeight <= element.clientHeight + 1 && element.scrollWidth <= element.clientWidth + 1)).toBe(true)
+  // Last look and size (relative to the photo) carry over; the content does not.
+  await expect(page.getByRole('combobox', { name: '글꼴' })).toHaveValue('blackhansans')
+  await expect(page.getByRole('slider', { name: '외곽선 두께' })).toHaveValue('10')
+  await expect(page.getByRole('button', { name: '내 스타일 1', exact: true })).toBeVisible()
+  await select(source); await page.getByRole('button', { name: '사진 열기', exact: true }).click()
+  await expect(page.getByRole('button', { name: '저장하고 다음' })).toBeEnabled()
+  await page.getByRole('button', { name: '글자 넣기' }).click()
+  await expect(page.getByRole('textbox', { name: '글자 내용' })).toHaveValue('텍스트')
+  await expect(page.getByLabel('글자색', { exact: true })).toHaveValue('#ff3b30')
+  expect(await value('글자 크기')).toBe(120)
+  await page.getByRole('button', { name: '내 스타일 1', exact: true }).hover()
+  await page.getByRole('button', { name: '내 스타일 1 삭제' }).click()
+  await expect(page.getByRole('button', { name: /^내 스타일 \d+$/ })).toHaveCount(0)
+  expect(errors).toEqual([])
+})
+
 function findFfmpeg() {
   const { spawnSync } = process.getBuiltinModule('node:child_process') as typeof import('node:child_process')
   for (const candidate of [process.env.FFMPEG_PATH, 'ffmpeg', '/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg'].filter(Boolean) as string[]) {

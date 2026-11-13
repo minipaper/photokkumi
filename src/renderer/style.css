@@ -213,13 +213,27 @@ button.disclosure:hover { color: var(--text); background: none; }.region-panel {
 .text-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; overflow-y: auto; }
 .text-add { display: flex; align-items: center; gap: 8px; }
 .text-add button { flex: none; height: 30px; }
-.text-add .hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+/* Up to two short lines beside the button instead of an ellipsis. */
+.text-add .hint { min-width: 0; font-size: 11px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .text-panel textarea { flex: none; width: 100%; min-height: 44px; max-height: 72px; resize: vertical; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: var(--radius); font-size: 15px; line-height: 1.3; background: var(--surface); color: var(--text); }
 .text-panel textarea:disabled { background: var(--surface-2); }
 .text-presets { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
 .text-presets .preset { height: 30px; padding: 0; display: flex; align-items: center; justify-content: center; border-color: var(--line); background: linear-gradient(135deg, #7d9cc4 0%, #b8a07c 55%, #e9e2d3 100%); }
 .text-presets .preset span { padding: 0 4px; border-radius: 4px; font-size: 16px; font-weight: 800; line-height: 1.25; paint-order: stroke fill; }
-.text-presets .preset:hover:not(:disabled) { border-color: var(--accent); }
+.text-presets .preset:hover:not(:disabled), .my-presets .preset:hover:not(:disabled) { border-color: var(--accent); }
+/* Font templates (row 3) get a slightly different backdrop so it reads as "also changes the font". */
+.text-presets .preset.template { background: linear-gradient(135deg, #5f7fa8 0%, #9d8b6e 60%, #d8d0c0 100%); }
+/* Built-in looks: three rows of seven; at small heights only one row shows and the grid scrolls (a leaf). */
+.text-presets { flex: none; max-height: calc(3 * 30px + 2 * 4px); overflow-y: auto; scrollbar-width: thin; }
+.my-presets { scrollbar-width: thin; }
+.my-presets { flex: none; display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; max-height: 30px; overflow-y: auto; align-items: center; }
+.my-presets .preset { width: 100%; height: 30px; padding: 0; display: flex; align-items: center; justify-content: center; border-color: var(--line); background: linear-gradient(135deg, #7d9cc4 0%, #b8a07c 55%, #e9e2d3 100%); }
+.my-presets .preset span { padding: 0 4px; border-radius: 4px; font-size: 16px; font-weight: 800; line-height: 1.25; paint-order: stroke fill; }
+.my-presets .preset.save { grid-column: span 2; background: var(--surface); border-style: dashed; color: var(--accent); font-size: 12px; font-weight: 600; }
+.my-presets .hint { grid-column: span 5; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.my-preset { position: relative; min-width: 0; }
+.my-preset .remove { position: absolute; top: 1px; right: 1px; width: 16px; height: 16px; padding: 0; border-radius: 50%; font-size: 11px; line-height: 1; display: none; place-items: center; background: var(--surface); }
+.my-preset:hover .remove, .my-preset:focus-within .remove { display: grid; }
 .text-fields { gap: 6px; grid-template-columns: minmax(0, 1fr); }
 .text-fields > * { min-width: 0; }
 .text-fields select { flex: 1; min-width: 0; height: 28px; margin-left: 8px; }
@@ -331,9 +345,12 @@ dialog.library-dialog { width: min(860px, 92vw); max-width: 92vw; max-height: 86
 }
 @media (max-height: 640px) {
   .text-panel { gap: 6px; padding: 8px 10px; }
-  .text-add .hint { display: none; }
+  /* Same action as the toolbar T button / T key; dropped so the panel fits 580px without nesting scrollbars. */
+  .text-add { display: none; }
   .text-panel textarea { min-height: 36px; }
-  .text-presets .preset { height: 26px; }
+  .text-presets .preset, .my-presets .preset { height: 26px; }
+  .text-presets { max-height: 26px; }
+  .my-presets { max-height: 26px; }
   .text-fields { gap: 4px; padding: 6px 8px; }
   .text-panel textarea { min-height: 32px; padding: 4px 8px; }
   .text-fields select, .text-fields input[type=number], .text-fields .bold-toggle { height: 25px; }

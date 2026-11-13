@@ -1,7 +1,7 @@
 import { useEffect, useRef, type ReactNode, type RefObject } from 'react'
 import { BUNDLED_FONTS, CATEGORY_LABELS, systemFont, systemFamily, type FontCategory } from '../shared/fonts'
-import { MAX_TEXTS, TEXT_PRESETS, type TextAlign, type TextItem, type TextStyle } from '../shared/text'
-import { previewFamily } from './text'
+import { MAX_MY_PRESETS, MAX_TEXTS, TEXT_PRESETS, type MyPreset, type TextAlign, type TextItem, type TextStyle } from '../shared/text'
+import { ensureFont, previewFamily } from './text'
 
 interface Props {
   photoOpen: boolean
@@ -14,6 +14,11 @@ interface Props {
   maxFontSize: number
   /** null while the PC font list is loading. */
   systemFonts: string[] | null
+  /** Looks the user saved ("내 스타일"), newest first. */
+  myPresets: MyPreset[]
+  onSaveMine(): void
+  onApplyMine(preset: MyPreset): void
+  onDeleteMine(id: string): void
   textArea: RefObject<HTMLTextAreaElement | null>
   onAdd(): void
   onSelect(id: string): void
@@ -42,7 +47,21 @@ const alignIcon = (align: TextAlign) => <svg width="14" height="14" viewBox="0 0
   {[3, 6.5, 10, 13.5].map((y, index) => { const long = index % 2 === 0, w = long ? 12 : 8, x = align === 'left' ? 2 : align === 'right' ? 14 - w : 8 - w / 2; return <path key={y} d={`M${x} ${y}h${w}`} /> })}
 </svg>
 
-export function TextPanel({ photoOpen, busy, texts, selected, style, fontSize, maxFontSize, systemFonts, textArea, onAdd, onSelect, onText, onStyle, onFontSize, onCommit, onClear, children }: Props) {
+/** "가" drawn in a look on a photo-like backdrop, so each chip shows how the style reads on a picture. */
+function Sample({ look }: { look: TextStyle }) {
+  return <span style={{ color: look.color, fontFamily: previewFamily(look.font), fontWeight: look.bold ? 700 : 400,
+    background: look.boxOpacity > 0 ? `${look.boxColor}${Math.round(look.boxOpacity * 2.55).toString(16).padStart(2, '0')}` : undefined,
+    borderRadius: look.boxOpacity > 0 && !look.boxRound ? 0 : undefined,
+    WebkitTextStroke: look.strokeWidth > 0 ? `${Math.max(2, look.strokeWidth / 4)}px ${look.strokeColor}` : undefined,
+    textShadow: look.shadow ? '0 1px 3px rgba(0,0,0,.7)' : undefined }}>가</span>
+}
+export function TextPanel({ photoOpen, busy, texts, selected, style, fontSize, maxFontSize, systemFonts, myPresets, textArea, onAdd, onSelect, onText, onStyle, onFontSize, onCommit, onClear, onSaveMine, onApplyMine, onDeleteMine, children }: Props) {
+  // Chips preview their own fonts: load the template and saved-style faces once they are listed.
+  const fontKeys = [...new Set([...TEXT_PRESETS.flatMap(preset => preset.style.font ? [`${preset.style.font}|${preset.style.bold ?? true}`] : []),
+    ...myPresets.map(preset => `${preset.style.font}|${preset.style.bold}`)])].join(',')
+  useEffect(() => {
+    for (const key of fontKeys.split(',').filter(Boolean)) { const [font, bold] = key.split('|'); void ensureFont(font, bold === 'true').catch(() => undefined) }
+  }, [fontKeys])
   const off = busy || !photoOpen
   const editing = !!selected
   const family = systemFamily(style.font)
@@ -53,22 +72,23 @@ export function TextPanel({ photoOpen, busy, texts, selected, style, fontSize, m
   return <section className="text-panel" aria-label="글자">
     <div className="text-add">
       <button className="primary" disabled={off || texts.length >= MAX_TEXTS} onClick={onAdd}>+ 글자 추가</button>
-      <span className="hint">{editing ? '선택한 글자를 고칩니다' : photoOpen ? '스타일은 다음 글자에 적용' : '사진을 열면 글자를 넣을 수 있습니다'}</span>
+      <span className="hint">{editing ? '선택한 글자를 고칩니다' : photoOpen ? '스타일은 다음 글자에 적용됩니다' : '사진을 먼저 열어 주세요'}</span>
     </div>
-    <textarea ref={textArea} aria-label="글자 내용" rows={2} maxLength={500} placeholder={editing ? '' : '글자 추가를 누른 뒤 입력하세요'} disabled={off || !editing}
+    <textarea ref={textArea} aria-label="글자 내용" rows={2} spellCheck={false} maxLength={500} placeholder={editing ? '' : '글자 추가(T)를 누른 뒤 입력하세요'} disabled={off || !editing}
       value={selected?.text ?? ''} style={{ fontFamily: previewFamily(style.font), fontWeight: style.bold ? 700 : 400 }}
       onChange={e => onText(e.target.value)} onBlur={onCommit} />
     <div className="text-presets" role="group" aria-label="빠른 스타일">
-      {TEXT_PRESETS.map(preset => {
-        const look = { ...style, ...preset.style }
-        // A photo-like backdrop shows how each look reads on a picture.
-        return <button key={preset.name} className="preset" disabled={off} title={preset.name} aria-label={`스타일: ${preset.name}`}
-          onClick={() => onStyle(preset.style)}>
-          <span style={{ color: look.color, background: look.boxOpacity > 0 ? `${look.boxColor}${Math.round(look.boxOpacity * 2.55).toString(16).padStart(2, '0')}` : undefined,
-            WebkitTextStroke: look.strokeWidth > 0 ? `${Math.max(2, look.strokeWidth / 4)}px ${look.strokeColor}` : undefined,
-            textShadow: look.shadow ? '0 1px 3px rgba(0,0,0,.7)' : undefined }}>가</span>
-        </button>
-      })}
+      {TEXT_PRESETS.map(preset => <button key={preset.name} className={`preset${preset.style.font ? ' template' : ''}`} disabled={off} title={preset.name} aria-label={`스타일: ${preset.name}`}
+        onClick={() => onStyle(preset.style)}><Sample look={{ ...style, ...preset.style }} /></button>)}
+    </div>
+    <div className="my-presets" role="group" aria-label="내 스타일">
+      <button className="preset save" disabled={off || myPresets.length >= MAX_MY_PRESETS} title={myPresets.length >= MAX_MY_PRESETS ? `내 스타일은 ${MAX_MY_PRESETS}개까지 저장됩니다` : '지금 글꼴·크기·색·외곽선·배경·그림자를 내 스타일로 저장'}
+        aria-label="지금 스타일을 내 스타일로 저장" onClick={onSaveMine}>＋ 저장</button>
+      {myPresets.map((preset, index) => <div key={preset.id} className="my-preset">
+        <button className="preset" disabled={off} title={`내 스타일 ${index + 1} 적용 (글꼴·크기 포함)`} aria-label={`내 스타일 ${index + 1}`} onClick={() => onApplyMine(preset)}><Sample look={preset.style} /></button>
+        <button className="remove" disabled={busy} title="내 스타일 삭제" aria-label={`내 스타일 ${index + 1} 삭제`} onClick={() => onDeleteMine(preset.id)}>×</button>
+      </div>)}
+      {!myPresets.length && <span className="hint">자주 쓰는 스타일을 저장해 두세요</span>}
     </div>
     <div className="region-fields text-fields" role="group" aria-label="글자 스타일">
       <label>글꼴<select aria-label="글꼴" disabled={off} value={style.font} onChange={e => onStyle({ font: e.target.value })}>

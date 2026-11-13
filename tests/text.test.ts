@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { DEFAULT_TEXT_STYLE, MAX_TEXTS, TEXT_PRESETS, layoutText, lineAnchor, scaleText, validTextItem, validTextStyle, type TextItem } from '../src/shared/text'
+import { DEFAULT_TEXT_STYLE, MAX_MY_PRESETS, MAX_TEXTS, TEXT_PRESETS, layoutText, samePreset, validMyPresets, lineAnchor, scaleText, validTextItem, validTextStyle, type TextItem } from '../src/shared/text'
 import { BUNDLED_FONTS, fontFamilyList, systemFont, validFontRef } from '../src/shared/fonts'
 import { addInstance, addText, clearTexts, commitScene, duplicateSelected, emptyHistory, removeSelected, undoScene, updateSelected, updateSelectedText } from '../src/shared/scene'
 import { allowedPermission, bundleFileType } from '../src/main/security'
@@ -54,6 +54,24 @@ describe('글자 값 검증', () => {
     for (const bad of ['a"b', 'a\\b', 'a;b', '', ' lead', 'x'.repeat(121), 'a\nb']) expect(validFontRef(systemFont(bad))).toBe(false)
     expect(fontFamilyList(systemFont('맑은 고딕'))).toBe('"맑은 고딕", "PK pretendard", sans-serif')
     expect(fontFamilyList('jua')).toBe('"PK jua", "PK pretendard", sans-serif')
+  })
+})
+
+describe('빠른 스타일과 내 스타일', () => {
+  it('빠른 스타일은 7개씩 3줄, 이름이 겹치지 않고 3번째 줄만 글꼴을 바꾼다', () => {
+    expect(TEXT_PRESETS).toHaveLength(21)
+    expect(new Set(TEXT_PRESETS.map(preset => preset.name)).size).toBe(21)
+    expect(TEXT_PRESETS.map(preset => !!preset.style.font)).toEqual([...Array(14).fill(false), ...Array(7).fill(true)])
+  })
+  it('저장된 내 스타일 목록을 검증하고 같은 스타일을 알아본다', () => {
+    const mine = { id: 'm1', style: { ...DEFAULT_TEXT_STYLE }, relSize: 0.1 }
+    expect(validMyPresets([])).toBe(true)
+    expect(validMyPresets([mine])).toBe(true)
+    for (const bad of [[{ ...mine, relSize: 0 }], [{ ...mine, relSize: 2 }], [{ ...mine, style: { ...mine.style, color: 'red' } }], [{ ...mine, id: 5 }], 'x', null,
+      Array.from({ length: MAX_MY_PRESETS + 1 }, (_, index) => ({ ...mine, id: String(index) }))]) expect(validMyPresets(bad)).toBe(false)
+    expect(samePreset(mine, { style: { ...DEFAULT_TEXT_STYLE }, relSize: 0.1004 })).toBe(true)
+    expect(samePreset(mine, { style: { ...DEFAULT_TEXT_STYLE }, relSize: 0.12 })).toBe(false)
+    expect(samePreset(mine, { style: { ...DEFAULT_TEXT_STYLE, shadow: true }, relSize: 0.1 })).toBe(false)
   })
 })
 

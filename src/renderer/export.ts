@@ -7,6 +7,7 @@ import type { TextItem } from '../shared/text'
 import { drawText, ensureTextFonts } from './text'
 import { drawShape } from './thumb'
 import type { ShapeItem } from '../shared/shapes'
+import { cropArea, type CropRect } from '../shared/crop'
 /** PNG encoding runs in a worker: main-thread canvas encoding waits for idle time and stalled saves for seconds when the window was behind. */
 function encodePng(bitmap: ImageBitmap): Promise<Uint8Array> {
   const worker = new Worker(new URL('./encode-worker.ts', import.meta.url), { type: 'module' })
@@ -17,14 +18,16 @@ function encodePng(bitmap: ImageBitmap): Promise<Uint8Array> {
     worker.postMessage({ bitmap }, [bitmap])
   })
 }
-export async function composePng(photo: ImageBitmap, instances: StickerInstance[], assets: ReadonlyMap<string, { bitmap: ImageBitmap }>, output: OutputSettings = DEFAULT_OUTPUT, regions: BlurRegion[] = [], adjust: Adjustments = NEUTRAL_ADJUSTMENTS, texts: TextItem[] = [], shapes: ShapeItem[] = []): Promise<Uint8Array> {
+export async function composePng(photo: ImageBitmap, instances: StickerInstance[], assets: ReadonlyMap<string, { bitmap: ImageBitmap }>, output: OutputSettings = DEFAULT_OUTPUT, regions: BlurRegion[] = [], adjust: Adjustments = NEUTRAL_ADJUSTMENTS, texts: TextItem[] = [], shapes: ShapeItem[] = [], crop?: CropRect): Promise<Uint8Array> {
   // Fonts must be ready before drawing, or canvas silently falls back to another face.
   await ensureTextFonts(texts)
   const canvas = new OffscreenCanvas(1, 1)
   // Order: adjustments → blur/mosaic (hides adjusted pixels) → shapes → stickers (never adjusted) → texts.
   const adjusted = renderAdjusted(photo, adjust)
   const base = adjusted ?? photo
-  const size = outputSize(photo.width, photo.height, output)
+  // A crop saves only that part of the photo; everything is still placed in original coordinates.
+  const area = cropArea(crop, photo)
+  const size = outputSize(area.width, area.height, output)
   canvas.width = size.width
   canvas.height = size.height
   try {
@@ -33,7 +36,8 @@ export async function composePng(photo: ImageBitmap, instances: StickerInstance[
     context.imageSmoothingEnabled = true
     context.imageSmoothingQuality = 'high'
     if (output.format === 'jpg') { context.fillStyle = '#ffffff'; context.fillRect(0, 0, canvas.width, canvas.height) }
-    context.scale(size.width / photo.width, size.height / photo.height)
+    context.scale(size.width / area.width, size.height / area.height)
+    context.translate(-area.x, -area.y)
     context.drawImage(base, 0, 0)
     // Regions hide photo pixels only; stickers are always drawn above them.
     for (const region of regions) {

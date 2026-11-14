@@ -124,6 +124,8 @@ kbd { display: inline-block; min-width: 18px; padding: 0 4px; margin: 0 1px; bor
 .canvas-area { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; background: var(--canvas); overflow: hidden; }
 .canvas-area:focus-visible { outline: 2px solid #9a88ec; outline-offset: -2px; }
 .canvas-frame { position: relative; background: repeating-conic-gradient(#fff 0% 25%, #eee 0% 50%) 50% / 16px 16px; box-shadow: 0 2px 14px #0002; line-height: 0; }
+/* The crop tool's margin around the photo is plain canvas, not part of the picture. */
+.canvas-frame.cropping { background: none; box-shadow: none; }
 .view-tools {
   flex: none; display: flex; align-items: center; gap: 4px; padding: 5px 10px;
   background: var(--surface); border-top: 1px solid var(--line);
@@ -151,8 +153,8 @@ aside {
   flex: none; width: 288px; display: flex; flex-direction: column; min-height: 0; overflow: hidden;
   background: var(--surface); border-left: 1px solid var(--line);
 }
-.side-tabs { flex: none; display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 1px solid var(--line); }
-.side-tabs button { height: 38px; border: 0; border-radius: 0; background: none; color: var(--muted); font-weight: 600; border-bottom: 2px solid transparent; }
+.side-tabs { flex: none; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; border-bottom: 1px solid var(--line); }
+.side-tabs button { height: 38px; padding: 0 4px; white-space: nowrap; border: 0; border-radius: 0; background: none; color: var(--muted); font-weight: 600; border-bottom: 2px solid transparent; }
 .side-tabs button[aria-selected=true] { color: var(--accent); border-bottom-color: var(--accent); }
 .side-tabs button:hover:not(:disabled) { background: var(--surface-2); }
 .tab-dot { display: inline-block; width: 6px; height: 6px; margin-left: 5px; border-radius: 50%; background: var(--accent); vertical-align: 2px; }
@@ -162,6 +164,19 @@ aside {
 .adjust-head input { width: 60px; text-align: right; }
 .adjust-row input[type=range] { width: 100%; height: auto; padding: 0; border: 0; background: none; accent-color: var(--accent); }
 .adjust-row.temperature input[type=range] { accent-color: #e8833a; }
+.crop-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 12px; overflow: auto; }
+.crop-presets { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.crop-presets button { height: auto; min-height: 48px; padding: 5px 1px; display: grid; gap: 2px; place-content: center; text-align: center; }
+.crop-presets button b { font-size: 13px; font-variant-numeric: tabular-nums; }
+.crop-presets button small { color: var(--muted); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.crop-presets button[aria-checked=true] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.crop-presets button[aria-checked=true] small { color: var(--accent); }
+.crop-panel .field-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 12px; }
+.crop-panel .field-row .segmented { flex: 0 1 170px; }
+.crop-size { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
+.crop-size strong { color: var(--text); font-variant-numeric: tabular-nums; }
+.crop-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.crop-actions button { height: 30px; padding: 0 6px; font-size: 12px; }
 .adjust-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .adjust-actions button { height: 30px; padding: 0 6px; font-size: 12px; }
 .pane-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

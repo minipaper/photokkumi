@@ -13,6 +13,7 @@ import { StickerLibrary, readBounded } from './library'
 import { seedDefaultStickers } from './defaults'
 import { OutputStore } from './settings'
 import { outputSize, validOutput } from '../shared/output'
+import { validCropRect } from '../shared/crop'
 import { PhotoStore, validDroppedPaths } from './photos'
 import { THUMB_SESSION_ID, THUMB_SIZE, validThumbSaveRequest, type ThumbSaveRequest } from '../shared/shapes'
 import { ToolStore, VideoStore, runTool } from './ffmpeg'
@@ -189,7 +190,9 @@ async function save(request: SaveRequest): Promise<SaveReceipt | null> {
   const record = photos.get(request.photoId), photo = record.info
   if (request.png.byteLength > MAX_OUTPUT_BYTES) throw new Error('저장 이미지가 너무 큽니다.')
   const info = inspectImage(request.png, 'photo', true)
-  const expected = outputSize(photo.width, photo.height, request.output)
+  if (request.crop && !validCropRect(request.crop, photo)) throw new Error('자르기 범위가 사진을 벗어났습니다.')
+  const area = request.crop ?? photo
+  const expected = outputSize(area.width, area.height, request.output)
   if (info.width !== expected.width || info.height !== expected.height) throw new Error('출력 크기가 설정과 다릅니다.')
   const decoded = nativeImage.createFromBuffer(Buffer.from(request.png))
   if (decoded.isEmpty()) throw new Error('저장 이미지가 손상되었습니다.')

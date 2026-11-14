@@ -1022,6 +1022,16 @@ test('최소 창 크기에서도 페이지·우측 패널은 스크롤하지 않
   expect(layout.toolbarHeight).toBeLessThanOrEqual(52)
   expect(layout.canvas).toBeGreaterThan(250)
   await expect(page.getByRole('spinbutton', { name: '스티커 너비' })).toBeInViewport()
+  // The fifth side tab (자르기) and its panel fit the narrow sidebar without clipping or scrolling.
+  await page.getByRole('tab', { name: /자르기/ }).click()
+  const crop = await page.evaluate(() => {
+    const tabs = [...document.querySelectorAll('aside .side-tabs button')]
+    const panel = document.querySelector('.crop-panel')!
+    const captions = [...document.querySelectorAll('.crop-presets small')]
+    return { clipped: [...tabs, ...captions].some(item => item.scrollWidth > item.clientWidth + 1), panel: panel.scrollHeight > panel.clientHeight + 1, aside: document.querySelector('aside')!.scrollHeight > document.querySelector('aside')!.clientHeight + 1 }
+  })
+  expect(crop).toEqual({ clipped: false, panel: false, aside: false })
+  await expect(page.getByRole('button', { name: '완료', exact: true })).toBeInViewport()
 })
 
 async function drop(paths: string[], selector = 'main') {
@@ -1264,6 +1274,106 @@ test('보정은 사진에만 적용되고 슬라이더 1회 undo·초기화·모
   expect(errors).toEqual([])
 })
 
+test('자르기: C키·비율 프리셋·가로/세로·상자 끌기·Esc 취소·Enter 완료·undo, 모든 사진에 비율과 잘린 크기로 저장', async () => {
+  // Quadrants: red/yellow on the left, blue/purple-ish on the right, so a saved pixel tells where it came from.
+  await writeFile(source, makePng(1200, 800, (x, y) => [x < 600 ? 200 : 0, y < 400 ? 200 : 0, x >= 600 ? 200 : 0, 255]))
+  const second = join(directory, '둘째.png')
+  await writeFile(second, makePng(600, 900, (_x, y) => y < 50 ? [255, 255, 255, 255] : [0, 120, 0, 255]))
+  await select([source, second]); await page.getByRole('button', { name: '사진 열기', exact: true }).click()
+  await register(stickerPath)
+  await page.getByRole('button', { name: '투명 스티커 배치', exact: true }).click()
+  await field('중심 X', 600); await field('중심 Y', 400); await field('스티커 너비', 80)
+  const frame = page.getByTestId('canvas-frame'), size = page.getByTestId('crop-size'), tab = page.getByRole('tab', { name: /자르기/ })
+  await page.getByTestId('canvas-area').focus(); await page.keyboard.press('c')
+  await expect(tab).toHaveAttribute('aria-selected', 'true')
+  await expect(frame).toHaveAttribute('data-frame', '0,0,1200,800')
+  await expect(size).toHaveText('1200 × 800 px')
+  await expect(page.getByRole('radio', { name: /자유/ })).toHaveAttribute('aria-checked', 'true')
+  await page.getByRole('radio', { name: /^1:1/ }).click()
+  await expect(size).toHaveText('800 × 800 px')
+  await expect(page.getByRole('radio', { name: '▯ 세로', exact: true })).toBeDisabled()
+  await page.getByRole('radio', { name: /^4:3/ }).click()
+  await expect(size).toHaveText('1067 × 800 px')
+  await page.getByRole('radio', { name: '▯ 세로', exact: true }).click()
+  await expect(page.getByRole('radio', { name: /^3:4/ })).toHaveAttribute('aria-checked', 'true')
+  await expect(size).toHaveText('600 × 800 px')
+  // Drag the box 120 photo pixels left (it starts centered at x=300). The crop tool shows the photo with a 14px margin.
+  const box = (await frame.boundingBox())!, scale = Number(await frame.getAttribute('data-scale'))
+  const at = (x: number, y: number) => [box.x + 14 + x * scale, box.y + 14 + y * scale] as const
+  await page.mouse.move(...at(600, 600)); await page.mouse.down()
+  await page.mouse.move(...at(480, 600), { steps: 10 }); await page.mouse.up()
+  await expect.poll(async () => Math.abs(Number(await size.getAttribute('data-x')) - 180)).toBeLessThan(3 / scale)
+  await expect(size).toHaveAttribute('data-y', '0')
+  await expect(size).toHaveText('600 × 800 px')
+  // Free ratio: drag the bottom-right handle up-left by 100 photo pixels; the top-left corner stays.
+  await page.getByRole('radio', { name: /자유/ }).click()
+  await page.mouse.move(...at(780, 800)); await page.mouse.down()
+  await page.mouse.move(...at(680, 700), { steps: 10 }); await page.mouse.up()
+  const [w, h] = (await size.textContent())!.match(/\d+/g)!.map(Number)
+  expect(Math.abs(w - 500)).toBeLessThan(3 / scale); expect(Math.abs(h - 700)).toBeLessThan(3 / scale)
+  await expect(size).toHaveAttribute('data-y', '0')
+  // Esc drops the edit; the photo is not cut yet.
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('tab', { name: /스티커/ })).toHaveAttribute('aria-selected', 'true')
+  await expect(frame).toHaveAttribute('data-frame', '0,0,1200,800')
+
+  await tab.click()
+  await page.getByRole('radio', { name: /^4:3/ }).click()
+  await page.getByRole('radio', { name: '▯ 세로', exact: true }).click()
+  await page.getByTestId('canvas-area').focus()
+  // Shift+arrow moves 10px and the box never leaves the photo: 40 steps left pin it at 0, 20 right give x=200.
+  for (let i = 0; i < 40; i++) await page.keyboard.press('Shift+ArrowLeft')
+  await expect(size).toHaveAttribute('data-x', '0')
+  for (let i = 0; i < 20; i++) await page.keyboard.press('Shift+ArrowRight')
+  await expect(size).toHaveAttribute('data-x', '200')
+  await page.keyboard.press('Enter')
+  await expect(page.getByRole('tab', { name: /스티커/ })).toHaveAttribute('aria-selected', 'true')
+  await expect(frame).toHaveAttribute('data-frame', '200,0,600,800')
+  await expect(page.getByText(/자르기 600 × 800/)).toBeVisible()
+  await expect(tab).toContainText('자르기')
+  // The sticker keeps its photo position and stays selectable inside the cut area.
+  await page.getByRole('button', { name: /^배치 1/ }).click()
+  expect(await value('중심 X')).toBe(600)
+
+  await tab.click()
+  await page.getByRole('button', { name: '모든 사진에 이 비율', exact: true }).click()
+  await expect(page.getByRole('status')).toContainText('다른 사진 1장을 가로 사진 4:3, 세로 사진 3:4 비율로')
+  await expect(page.getByRole('button', { name: '사진 2: 둘째.png', exact: true })).toContainText('수정됨')
+  await page.getByRole('button', { name: '완료', exact: true }).click()
+
+  await save()
+  const result = await output()
+  expect([result.width, result.height]).toEqual([600, 800])
+  expect(pixel(result, 0, 0)).toEqual([200, 200, 0, 255])
+  expect(pixel(result, 599, 799)).toEqual([0, 0, 200, 255])
+  // Sticker at photo (600, 400) lands at (400, 400) in the cut image.
+  expect(pixel(result, 380, 395)).toEqual([255, 0, 0, 255])
+  expect(pixel(result, 420, 395)).toEqual([0, 255, 0, 255])
+
+  // Undo/redo the crop as one step.
+  await page.getByTestId('canvas-area').focus()
+  await page.keyboard.press('ControlOrMeta+z')
+  await expect(frame).toHaveAttribute('data-frame', '0,0,1200,800')
+  await page.keyboard.press('ControlOrMeta+Shift+z')
+  await expect(frame).toHaveAttribute('data-frame', '200,0,600,800')
+  await save()
+
+  await page.getByRole('button', { name: '저장하고 다음' }).click()
+  await expect(page.getByRole('button', { name: '사진 2: 둘째.png', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(frame).toHaveAttribute('data-frame', '0,50,600,800')
+  await save()
+  const portrait = await output('둘째_kkumi.png')
+  expect([portrait.width, portrait.height]).toEqual([600, 800])
+  // The white top band (y < 50) was cut away.
+  expect(pixel(portrait, 300, 0)).toEqual([0, 120, 0, 255])
+  // 원래대로 + 완료 brings back the whole photo.
+  await tab.click()
+  await page.getByRole('button', { name: '원래대로', exact: true }).click()
+  await expect(size).toHaveText('600 × 900 px')
+  await page.getByRole('button', { name: '완료', exact: true }).click()
+  await expect(frame).toHaveAttribute('data-frame', '0,0,600,900')
+  expect(errors).toEqual([])
+})
 test('글자: T키·패널 입력·내장 글꼴·배경 상자·크기 undo·키보드 삭제와 미리보기·저장 픽셀이 일치한다', async () => {
   await select(source); await page.getByRole('button', { name: '사진 열기', exact: true }).click()
   await expect(page.getByRole('button', { name: '저장하고 다음' })).toBeEnabled()

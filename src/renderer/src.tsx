@@ -25,6 +25,7 @@ import { createPhotoSession, editPhotoSession, savePhotoSession, discardPhotoSes
 import { DEFAULT_OUTPUT, validOutput, outputSize, outputKey, type OutputSettings } from '../shared/output'
 import { composePng } from './export'
 import { ADJUSTMENT_KEYS, isNeutral, sameAdjustments, NEUTRAL_ADJUSTMENTS, type Adjustments } from '../shared/filters'
+import { CROP_LABELS, CROP_PRESETS, aspectRatio, centeredCrop, cropArea, fullCrop, hasOrientation, isPortraitAspect, moveCrop, normalizeCrop, orient, sameCrop, type Crop, type CropAspect, type CropRect } from '../shared/crop'
 import './style.css'
 const validTextDefaults = (value: unknown): value is { style: TextStyle; relSize: number } => {
   const v = value as Record<string, unknown> | null
@@ -92,7 +93,7 @@ function App() {
   type RegionEffect = { style: RegionStyle; strength: number; shape: RegionShape }
   const [regionDefaults, setRegionDefaults] = useState<RegionEffect>(() => loadPref('pk.regionDefaults', { style: 'blur', strength: 50, shape: 'ellipse' }, validRegionEffect))
   const liveBase = useRef<Scene | null>(null)
-  type SideTab = 'stickers' | 'regions' | 'adjust' | 'text'
+  type SideTab = 'stickers' | 'regions' | 'adjust' | 'text' | 'crop'
   const [sideTab, setSideTab] = useState<SideTab>('stickers')
   // Look of the next text; relSize is the font size relative to the photo's short edge so captions match across photos.
   type TextDefaults = { style: TextStyle; relSize: number }
@@ -117,6 +118,15 @@ function App() {
   useEffect(() => { if (textTabOpen && systemFonts === null) void listSystemFonts().then(setSystemFonts) }, [textTabOpen, systemFonts])
   // The region tab is the blur/mosaic tool: it stays on until another tab, Esc or the toolbar button.
   const drawMode = sideTab === 'regions' && mode === 'photo' && !!photo
+  // The crop tab is the crop tool: the canvas shows the whole photo with the crop box until the tab closes.
+  const cropMode = sideTab === 'crop' && mode === 'photo' && !!photo
+  /** Crop being edited; it becomes one undo step when the tool closes (완료/Enter, another tab, saving, switching photos). Esc drops it. */
+  type CropDraft = { photoId: string; width: number; height: number; crop: Crop }
+  const [cropDraft, setCropDraftState] = useState<CropDraft | null>(null)
+  const cropDraftRef = useRef<CropDraft | null>(null)
+  const setCropDraft = (next: CropDraft | null) => { cropDraftRef.current = next; setCropDraftState(next) }
+  /** 가로/세로 choice for ratio presets (4:3 ↔ 3:4). */
+  const [cropPortrait, setCropPortrait] = useState(false)
   const [incomingVideo, setIncomingVideo] = useState<{ ref: VideoRef; nonce: number } | null>(null)
   const [gifBusy, setGifBusy] = useState(false)
   const showError = useCallback((text: string) => setError(text), [])
@@ -139,7 +149,8 @@ function App() {
   const [libraryItems, setLibraryItems] = useState<LibrarySticker[]>([])
   const [dirty, setDirty] = useState(false)
   // Edits can wait in both the thumbnail and the editor's photo (switching tabs does not ask to save).
-  const anyDirty = dirty || [...sessions.current.values()].some(session => session.dirty)
+  const cropPending = !!cropDraft && !!photo && cropDraft.photoId === photo.id && !sameCrop(normalizeCrop(cropDraft.crop, cropDraft), scene.crop)
+  const anyDirty = dirty || cropPending || [...sessions.current.values()].some(session => session.dirty)
   const [closeRequest, setCloseRequest] = useState<string | null>(null)
   const closeDialog = useRef<HTMLDialogElement>(null)
   useEffect(() => window.photokkumi.onCloseRequested(setCloseRequest), [])
@@ -226,6 +237,65 @@ function App() {
     }
     setStatus(count ? `보정 값을 다른 사진 ${count}장에 적용했습니다. 사진마다 실행 취소할 수 있습니다.` : '다른 사진에 이미 같은 보정이 적용되어 있습니다.')
   }
+  /** Writes a crop draft into its photo's history (the active photo or one already switched away from). */
+  function commitCropDraft(pending: CropDraft) {
+    const session = sessions.current.get(pending.photoId)
+    if (!session) return
+    const crop = normalizeCrop(pending.crop, pending), active = pending.photoId === activeId.current
+    const present = active ? currentHistory.current.present : session.history.present
+    if (sameCrop(present.crop, crop)) return
+    if (active) editScene({ ...present, crop })
+    else sessions.current.set(pending.photoId, editPhotoSession(session, commitScene(session.history, { ...present, crop })))
+  }
+  function commitCrop() { if (cropDraftRef.current) commitCropDraft(cropDraftRef.current) }
+  useEffect(() => {
+    const pending = cropDraftRef.current
+    // Leaving the tool some other way (a toolbar button, another mode or photo) still keeps the crop.
+    if (pending && (!cropMode || pending.photoId !== photo?.id)) commitCropDraft(pending)
+    if (!cropMode || !photo) { setCropDraft(null); return }
+    // Undo/redo or a commit changed the crop: show the photo's crop (an unchanged draft keeps its preset).
+    if (pending?.photoId === photo.id && sameCrop(normalizeCrop(pending.crop, pending), scene.crop)) return
+    const crop = scene.crop ?? fullCrop(photo)
+    setCropDraft({ photoId: photo.id, width: photo.width, height: photo.height, crop })
+    setCropPortrait(hasOrientation(crop.aspect) ? isPortraitAspect(crop.aspect) : photo.height > photo.width)
+    // commitCropDraft only reads refs and session state.
+  }, [cropMode, photo, scene.crop])
+  function changeCropRect(rect: CropRect) { const draft = cropDraftRef.current; if (draft) setCropDraft({ ...draft, crop: { ...draft.crop, ...rect } }) }
+  function chooseCropAspect(base: CropAspect) {
+    const draft = cropDraftRef.current
+    if (!draft) return
+    const aspect = orient(base, cropPortrait)
+    // A ratio starts as the largest centered box; 자유 keeps the box and only unlocks the ratio.
+    setCropDraft({ ...draft, crop: aspect === 'free' ? { ...draft.crop, aspect } : centeredCrop(draft, aspect) })
+  }
+  function chooseCropOrientation(portrait: boolean) {
+    setCropPortrait(portrait)
+    const draft = cropDraftRef.current
+    if (draft && hasOrientation(draft.crop.aspect) && isPortraitAspect(draft.crop.aspect) !== portrait) setCropDraft({ ...draft, crop: centeredCrop(draft, orient(draft.crop.aspect, portrait)) })
+  }
+  function resetCrop() { const draft = cropDraftRef.current; if (draft) setCropDraft({ ...draft, crop: fullCrop(draft) }) }
+  function finishCrop() { commitCrop(); openTab('stickers') }
+  function cancelCrop() { cropDraftRef.current = null; setCropDraftState(null); openTab('stickers') }
+  function applyCropToAll() {
+    commitCrop()
+    const aspect = cropDraftRef.current?.crop.aspect
+    if (!aspect || aspect === 'free' || aspect === 'original') return
+    let count = 0
+    for (const item of photos) {
+      const session = sessions.current.get(item.id)
+      if (!session || item.id === activeId.current) continue
+      // Same ratio, each photo in its own orientation (like the 가로/세로 사진 sizes in 저장 설정); a photo already cut to it keeps its own position.
+      const own = orient(aspect, item.height > item.width), present = session.history.present
+      if (present.crop?.aspect === own) continue
+      const crop = normalizeCrop(centeredCrop(item, own), item)
+      if (sameCrop(present.crop, crop)) continue
+      sessions.current.set(item.id, editPhotoSession(session, commitScene(session.history, { ...present, crop })))
+      count++
+    }
+    const landscape = orient(aspect, false), portrait = orient(aspect, true)
+    const ratio = landscape === portrait ? landscape : `가로 사진 ${landscape}, 세로 사진 ${portrait}`
+    setStatus(count ? `다른 사진 ${count}장을 ${ratio} 비율로 가운데를 잘랐습니다. 사진마다 위치를 고치거나 실행 취소할 수 있습니다.` : `다른 사진이 이미 ${ratio} 비율로 잘려 있습니다.`)
+  }
   function drawRegion(value: Placement) {
     if (!photo) return
     try {
@@ -239,6 +309,7 @@ function App() {
     const kind = selectedKind(current)
     // The adjust tab keeps a sticker/text selection (as before); the other tabs only keep their own kind.
     if (kind && (tab === 'adjust' ? kind === 'regions' : kind !== tab)) selectInstance(null)
+    if (tab !== 'crop') commitCrop()
     setSideTab(tab)
   }
   /** Selecting on the canvas brings up the tab that edits that item. */
@@ -250,7 +321,9 @@ function App() {
     if (current.texts.some(item => item.id === id)) setSideTab('text')
     else if (current.stickers.some(item => item.id === id)) setSideTab('stickers')
   }
-  const shortEdge = photo ? Math.min(photo.width, photo.height) : 1000
+  /** The part of the photo that is shown and saved (the crop, or all of it); new stickers and texts land in its middle. */
+  const view = photo ? cropArea(scene.crop, photo) : null
+  const shortEdge = view ? Math.min(view.width, view.height) : 1000
   const maxFontSize = Math.max(64, Math.round(shortEdge * 0.5))
   function rememberText(next: TextDefaults) { setTextDefaults(next); savePref('pk.textDefaults', next) }
   const addTextItem = () => run(async () => {
@@ -262,7 +335,8 @@ function App() {
     // Each new text lands a line below the previous one so they do not pile up.
     const offset = (current.texts.length % 4) * fontSize * 1.6
     const measured = withMeasuredSize({ text: DEFAULT_TEXT, fontSize, style: { ...textDefaults.style } })
-    editScene(addText(currentHistory.current.present, { id: crypto.randomUUID(), ...measured, x: photo.width / 2, y: Math.min(photo.height, photo.height / 2 + offset), rotation: 0 }))
+    const area = cropArea(current.crop, photo)
+    editScene(addText(currentHistory.current.present, { id: crypto.randomUUID(), ...measured, x: area.x + area.width / 2, y: Math.min(area.y + area.height, area.y + area.height / 2 + offset), rotation: 0 }))
     if (mode === 'thumb') setThumbTab('text'); else setSideTab('text')
     setStatus('글자를 추가했습니다. 오른쪽 입력칸에 내용을 쓰고, 사진 위에서 옮기거나 모서리로 크기를 바꾸세요.')
     focusNewText.current = true
@@ -391,10 +465,11 @@ function App() {
         decoded = await decode(asset)
         assets.current.set(asset.id, decoded)
       }
-      const width = Math.min(decoded.width, photo.width / 3)
-      const offset = Math.min((currentHistory.current.present.stickers.length % 10) * 20, photo.width / 8, photo.height / 8)
+      const area = cropArea(currentHistory.current.present.crop, photo)
+      const width = Math.min(decoded.width, area.width / 3)
+      const offset = Math.min((currentHistory.current.present.stickers.length % 10) * 20, area.width / 8, area.height / 8)
       editScene(addInstance(currentHistory.current.present, {
-        id: crypto.randomUUID(), assetId: decoded.id, x: photo.width / 2 + offset, y: photo.height / 2 + offset,
+        id: crypto.randomUUID(), assetId: decoded.id, x: area.x + area.width / 2 + offset, y: area.y + area.height / 2 + offset,
         width, height: width * decoded.height / decoded.width, rotation: 0, zOrder: 0
       }))
       setStatus('스티커를 추가했습니다. 클릭해 선택하고 각각 이동·크기·회전을 조절하세요.')
@@ -422,6 +497,21 @@ function App() {
     if (event.defaultPrevented || event.nativeEvent.isComposing || event.altKey
       || operation.current || closeRequest || pendingPhoto || libraryOpen || (target instanceof HTMLElement
         && (target.isContentEditable || target.closest('input, textarea, select, dialog, [role="textbox"]')))) return
+    if (cropMode) {
+      const plain = !event.ctrlKey && !event.metaKey
+      if (event.key === 'Escape') { event.preventDefault(); cancelCrop(); return }
+      // Enter on a focused panel button presses that button instead.
+      if (event.key === 'Enter' && plain && !(target instanceof HTMLElement && target.closest('button'))) { event.preventDefault(); finishCrop(); return }
+      if (plain && !event.shiftKey && event.key.toLowerCase() === 'c' && !event.repeat) { event.preventDefault(); finishCrop(); return }
+      const step = event.shiftKey ? 10 : 1
+      const delta = ({ ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] } as Record<string, [number, number]>)[event.key]
+      const draft = cropDraftRef.current
+      if (delta && plain && draft) { event.preventDefault(); changeCropRect(moveCrop(draft.crop, draft.crop.x + delta[0], draft.crop.y + delta[1], draft)); return }
+      // Undo/redo first keeps the box as one step; other shortcuts (T, Delete, …) wait until the crop is done.
+      if (plain) return
+      commitCrop()
+    }
+    if (photo && mode === 'photo' && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.key.toLowerCase() === 'c' && !event.repeat) { event.preventDefault(); openTab('crop'); return }
     if (event.key === 'Escape' && drawMode) { event.preventDefault(); openTab('stickers'); return }
     if (photo && mode === 'photo' && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.key.toLowerCase() === 'b' && !event.repeat) { event.preventDefault(); openTab(sideTab === 'regions' ? 'stickers' : 'regions'); return }
     if (photo && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.key.toLowerCase() === 't' && !event.repeat && !drawMode) { event.preventDefault(); void addTextItem(); return }
@@ -552,7 +642,9 @@ function App() {
   })
   const requestPhoto = (id: string) => {
     if (operation.current || pendingPhoto || closeRequest || id === activeId.current) return
-    if (dirty) { setPendingPhoto(id); switchDialog.current?.showModal() }
+    // A crop still being edited counts as an edit of this photo.
+    commitCrop()
+    if (activeId.current && sessions.current.get(activeId.current)?.dirty) { setPendingPhoto(id); switchDialog.current?.showModal() }
     else void run(() => activatePhoto(id))
   }
   const cancelSwitch = () => { switchDialog.current?.close(); setPendingPhoto(null) }
@@ -570,15 +662,16 @@ function App() {
     const photo = livePhoto.current
     if (!photo || photo.id === THUMB) return false
     if (!outputLoaded) throw new Error('출력 설정을 불러온 뒤 저장할 수 있습니다.')
-    outputSize(photo.width, photo.height, output)
-    // Typing or a slider drag still in progress becomes its undo step now, not after the save marks the photo clean.
-    commitLive()
+    // Typing, a slider drag or a crop still in progress becomes its undo step now, not after the save marks the photo clean.
+    commitLive(); commitCrop()
+    const area = cropArea(currentHistory.current.present.crop, photo)
+    outputSize(area.width, area.height, output)
     setStatus('저장 중…')
     const persisted = await window.photokkumi.updateOutputSettings(output)
     if (!persisted.ok) throw new Error(persisted.error)
     const present = currentHistory.current.present
-    const png = await composePng(photo.bitmap, present.stickers, assets.current, output, present.regions, present.adjust, present.texts)
-    const result = await window.photokkumi.saveImage({ photoId: photo.id, png, output })
+    const png = await composePng(photo.bitmap, present.stickers, assets.current, output, present.regions, present.adjust, present.texts, [], present.crop)
+    const result = await window.photokkumi.saveImage({ photoId: photo.id, png, output, ...(present.crop ? { crop: cropArea(present.crop, photo) } : {}) })
     if (!result.ok) throw new Error(result.error)
     if (!result.value) { setStatus('저장이 취소되었습니다. 편집 내용은 유지됩니다.'); return false }
     sessions.current.set(photo.id, savePhotoSession(sessions.current.get(photo.id)!, outputKey(output), result.value.folderLabel))
@@ -600,6 +693,7 @@ function App() {
   const photoIndex = photos.findIndex(item => item.id === photo?.id)
   const saveNext = () => run(async () => {
     if (!photo) return
+    commitCrop()
     const session = sessions.current.get(photo.id)!
     if ((session.dirty || !session.saved || session.outputKey !== outputKey(output) || session.savedFolder !== outputFolder) && !await saveCurrent()) return
     const next = photos[photoIndex + 1]
@@ -620,6 +714,7 @@ function App() {
   const cancelClose = () => { void resolveClose('cancel').catch(value => setError(String(value))) }
   /** Close dialog "저장": the thumbnail and the editor's photo, whichever has unsaved edits. */
   async function saveAllDirty(): Promise<boolean> {
+    commitCrop()
     if (sessions.current.get(THUMB)?.dirty && !await saveThumbCurrent()) return false
     const photoId = activeId.current === THUMB ? photoModeId.current : activeId.current
     if (!photoId || !sessions.current.get(photoId)?.dirty) return true
@@ -808,7 +903,7 @@ function App() {
   let outputError = '', outputLabel = ''
   try {
     if (!validOutput(output)) throw new Error('출력 길이는 1~8192 정수로 입력하세요. JPG 품질은 100입니다.')
-    if (photo) { const size = outputSize(photo.width, photo.height, output); outputLabel = `${size.width} × ${size.height} px` }
+    if (photo) { const area = cropArea(cropMode && cropDraft ? cropDraft.crop : scene.crop, photo), size = outputSize(area.width, area.height, output); outputLabel = `${size.width} × ${size.height} px` }
   } catch (value) { outputError = value instanceof Error ? value.message : '출력 설정을 확인하세요.' }
   const libraryProps = { items: libraryItems, disabled: busy, canUse: !!photo, activeIds: referencedIds,
     onUse: useSticker, onImport: importStickers, onBackup: backupLibrary, onRestore: restoreLibrary,
@@ -946,8 +1041,8 @@ function App() {
         <button onClick={choosePhotoFolder} disabled={busy || !!pendingPhoto}>폴더 열기</button>
       </nav>
       <div className="toolbar-group" aria-label="편집 이력">
-        <button className="icon" aria-label="실행 취소" title="실행 취소 (Ctrl+Z)" disabled={busy || !history.past.length} onClick={() => applyHistory(undoScene(currentHistory.current))}><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M5.5 3.5 2.5 6.5l3 3"/><path d="M2.5 6.5h7a4 4 0 0 1 0 8H7"/></svg></button>
-        <button className="icon" aria-label="다시 실행" title="다시 실행 (Ctrl+Shift+Z)" disabled={busy || !history.future.length} onClick={() => applyHistory(redoScene(currentHistory.current))}><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="m10.5 3.5 3 3-3 3"/><path d="M13.5 6.5h-7a4 4 0 0 0 0 8H9"/></svg></button>
+        <button className="icon" aria-label="실행 취소" title="실행 취소 (Ctrl+Z)" disabled={busy || !history.past.length} onClick={() => { commitCrop(); applyHistory(undoScene(currentHistory.current)) }}><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M5.5 3.5 2.5 6.5l3 3"/><path d="M2.5 6.5h7a4 4 0 0 1 0 8H7"/></svg></button>
+        <button className="icon" aria-label="다시 실행" title="다시 실행 (Ctrl+Shift+Z)" disabled={busy || !history.future.length} onClick={() => { commitCrop(); applyHistory(redoScene(currentHistory.current)) }}><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="m10.5 3.5 3 3-3 3"/><path d="M13.5 6.5h-7a4 4 0 0 0 0 8H9"/></svg></button>
       </div>
       <div className="toolbar-group">
         <button className="draw-toggle" aria-label="블러·모자이크" aria-pressed={drawMode} disabled={busy || !photo} title="블러·모자이크 도구 (B) — 켜 둔 채로 여러 곳을 연속으로 가릴 수 있습니다" onClick={() => openTab(sideTab === 'regions' ? 'stickers' : 'regions')}>
@@ -999,7 +1094,11 @@ function App() {
           : <div className="empty"><span>썸네일을 준비하는 중…</span></div>)
         : photo ? <EditorCanvas key={photo.id} photo={photo} assets={assets.current} scene={scene} disabled={busy} onChange={(id, value) => change(value, id)} selectionTools={editTools}
           drawMode={drawMode} drawShape={regionDefaults.shape} onDraw={drawRegion} onSelect={selectFromCanvas}
-          info={<>{photo.name} · {photo.width} × {photo.height} px{outputLabel && outputLabel !== `${photo.width} × ${photo.height} px` ? ` → ${outputLabel}` : ''} · <b className={dirty ? 'dirty' : ''}>{dirty ? '수정됨' : '원본 / 저장됨'}</b></>} />
+          crop={scene.crop} cropEdit={cropMode && cropDraft?.photoId === photo.id ? { rect: cropDraft.crop, ratio: aspectRatio(cropDraft.crop.aspect, photo), onChange: changeCropRect } : undefined}
+          info={(() => {
+            const area = cropArea(cropMode && cropDraft ? cropDraft.crop : scene.crop, photo), cut = area.width !== photo.width || area.height !== photo.height
+            return <>{photo.name} · {photo.width} × {photo.height} px{cut ? ` → 자르기 ${area.width} × ${area.height}` : ''}{outputLabel && outputLabel !== `${area.width} × ${area.height} px` ? ` → ${outputLabel}` : ''} · <b className={dirty || cropPending ? 'dirty' : ''}>{dirty || cropPending ? '수정됨' : '원본 / 저장됨'}</b></>
+          })()} />
           : <div className="empty"><div className="drop-target"><strong>사진을 이 창으로 끌어다 놓으세요</strong><span>탐색기에서 JPG·PNG 사진 여러 장이나 폴더를 한 번에 끌어 놓으면 바로 불러옵니다.</span><span>또는 위의 <b>사진 열기</b> · <b>폴더 열기</b></span></div></div>}
       </div>
       <aside>
@@ -1025,6 +1124,7 @@ function App() {
           <button role="tab" aria-selected={sideTab === 'regions'} onClick={() => openTab('regions')}>가림{!!scene.regions.length && <span className="tab-count">{scene.regions.length}</span>}</button>
           <button role="tab" aria-selected={sideTab === 'text'} onClick={() => openTab('text')}>글자{!!scene.texts.length && <span className="tab-count">{scene.texts.length}</span>}</button>
           <button role="tab" aria-selected={sideTab === 'adjust'} onClick={() => openTab('adjust')}>보정{!isNeutral(scene.adjust) && <span className="tab-dot" aria-label="(적용됨)" />}</button>
+          <button role="tab" aria-selected={sideTab === 'crop'} title="자르기 (C)" onClick={() => openTab('crop')}>자르기{!!scene.crop && <span className="tab-dot" aria-label="(적용됨)" />}</button>
         </div>
         {sideTab === 'regions' ? <section className="region-panel" aria-label="블러·모자이크">
           <div className="region-fields" role="group" aria-label="가림 효과">
@@ -1055,7 +1155,31 @@ function App() {
               onClick={() => selectInstance(item.id)}>{item.shape === 'rect' ? '▭' : '◯'} {item.style === 'blur' ? '블러' : '모자이크'} {index + 1}</button>)}
           </div>}
           {region ? numericFields : <p className="hint">{photo ? '켜 둔 채로 여러 곳을 연속으로 가릴 수 있습니다. 빈 곳을 드래그하면 새 영역, 영역을 누르면 선택됩니다. Shift는 정원·정사각형, 사진 밖에서 드래그를 시작하면 사진 끝에 딱 맞춰집니다. Esc나 B로 도구를 끕니다.' : '사진을 열면 블러·모자이크로 가릴 수 있습니다.'}</p>}
-        </section> : sideTab === 'text' ? textPanel : sideTab === 'adjust' ? <section className="adjust-panel" aria-label="사진 보정">
+        </section> : sideTab === 'crop' ? (() => {
+          const aspect = cropDraft?.crop.aspect, orientable = !!aspect && hasOrientation(aspect)
+          return <section className="crop-panel" aria-label="자르기">
+            <div className="crop-presets" role="radiogroup" aria-label="자르기 비율">
+              {CROP_PRESETS.map(base => {
+                const label = CROP_LABELS[orient(base, cropPortrait)]
+                return <button key={base} role="radio" aria-checked={!!aspect && orient(aspect, false) === base} disabled={busy || !cropDraft} title={`${label.name} · ${label.use}`}
+                  onClick={() => chooseCropAspect(base)}><b>{label.name}</b><small>{label.use}</small></button>
+              })}
+            </div>
+            <div className="field-row"><span>방향</span><div className="segmented" role="radiogroup" aria-label="자르기 방향">
+              <button role="radio" aria-checked={!cropPortrait} disabled={busy || !orientable} onClick={() => chooseCropOrientation(false)}>▭ 가로</button>
+              <button role="radio" aria-checked={cropPortrait} disabled={busy || !orientable} onClick={() => chooseCropOrientation(true)}>▯ 세로</button>
+            </div></div>
+            <p className="crop-size">자를 크기 <strong data-testid="crop-size" data-x={cropDraft?.crop.x} data-y={cropDraft?.crop.y}>{cropDraft ? `${cropDraft.crop.width} × ${cropDraft.crop.height} px` : '-'}</strong></p>
+            <div className="crop-actions">
+              <button className="primary" disabled={busy || !cropDraft} title="Enter" onClick={finishCrop}>완료</button>
+              <button disabled={busy || !cropDraft} title="Esc — 이 탭을 열기 전 범위로" onClick={cancelCrop}>취소</button>
+              <button disabled={busy || !cropDraft || (cropDraft.crop.width === cropDraft.width && cropDraft.crop.height === cropDraft.height)} title="자르지 않은 원본 전체로" onClick={resetCrop}>원래대로</button>
+              <button disabled={busy || !cropDraft || photos.length < 2 || !aspect || aspect === 'free' || aspect === 'original'}
+                title="다른 사진을 같은 비율로 가운데를 자릅니다 (세로 사진은 세로 비율로)" onClick={applyCropToAll}>모든 사진에 이 비율</button>
+            </div>
+            <p className="hint">{photo ? '모서리를 끌면 크기, 안쪽을 끌면 위치가 바뀝니다. 방향키 1px, Shift+방향키 10px 이동 · Enter 완료 · Esc 취소. 잘린 부분은 원본에 남아 있어 언제든 다시 넓힐 수 있습니다.' : '사진을 열면 자를 수 있습니다.'}</p>
+          </section>
+        })() : sideTab === 'text' ? textPanel : sideTab === 'adjust' ? <section className="adjust-panel" aria-label="사진 보정">
           {ADJUSTMENT_KEYS.map(key => {
             const label = { exposure: '노출', contrast: '대비', saturation: '채도', temperature: '색온도' }[key]
             return <div key={key} className={`adjust-row ${key}`}>
@@ -1111,7 +1235,7 @@ function App() {
         })}
       </div>
     </section>}
-    <footer className="statusbar"><p role="status" aria-live="polite">{status || (mode === 'photo' && photo ? <span className="shortcuts">Ctrl+S 저장 · Ctrl+Z 실행 취소 · Ctrl+D 복제 · Delete 삭제 · B 블러·모자이크 · T 글자 · Ctrl+휠 확대</span>
+    <footer className="statusbar"><p role="status" aria-live="polite">{status || (mode === 'photo' && photo ? <span className="shortcuts">Ctrl+S 저장 · Ctrl+Z 실행 취소 · Ctrl+D 복제 · Delete 삭제 · B 블러·모자이크 · T 글자 · C 자르기 · Ctrl+휠 확대</span>
   : mode === 'thumb' ? <span className="shortcuts">Ctrl+S 썸네일 저장 · Ctrl+Z 실행 취소 · Ctrl+D 복제 · Delete 삭제 · T 글자</span> : '')}</p>{error && !libraryOpen && !pendingPhoto && <p role="alert">{error}</p>}
       <div className="update-area" role="group" aria-label="업데이트">
         {update?.status === 'available' && dismissedUpdate !== update.version && <>

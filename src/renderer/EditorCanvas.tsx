@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Stage, Layer, Image as CanvasImage, Transformer, Group, Ellipse, Rect, Shape } from 'react-konva'
+import { Stage, Layer, Image as CanvasImage, Transformer, Group, Ellipse, Rect, Shape, Line } from 'react-konva'
 import type Konva from 'konva'
 import type { BlurRegion, Placement, RegionShape } from '../shared/model'
 import { buildRegionPatch, regionPath, regionKey, type RegionPatch } from './regions'
@@ -11,6 +11,7 @@ import type { TextItem } from '../shared/text'
 import { drawText } from './text'
 import { drawShape as paintShape } from './thumb'
 import type { ShapeItem } from '../shared/shapes'
+import { cropArea, moveCrop, resizeCrop, roundCrop, type CropRect } from '../shared/crop'
 // A bundled vector cursor keeps the rotation affordance crisp at high DPI.
 const rotationCursor = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><g fill="none" stroke="white" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M24 11a10 10 0 1 0 1 9M24 4v8h-8"/></g><g fill="none" stroke="#262b36" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M24 11a10 10 0 1 0 1 9M24 4v8h-8"/></g></svg>')}") 16 16, crosshair`
 interface Props {
@@ -27,6 +28,10 @@ interface Props {
   onDraw?(value: Placement): void
   /** Buttons shown in a small bar floating above the selected item. */
   selectionTools?: ReactNode
+  /** Saved part of the photo: the canvas shows only this area (items keep original coordinates). */
+  crop?: CropRect
+  /** Crop tool: the whole photo is shown with the crop box on top; items are locked. `done` marks the end of a drag (whole pixels). */
+  cropEdit?: { rect: CropRect; ratio: number | null; onChange(rect: CropRect, done: boolean): void }
 }
 type Point = { x: number; y: number }
 type Draft = { start: Point; end: Point; circle: boolean; client: Point; moved: boolean }
@@ -38,7 +43,11 @@ function draftPlacement(draft: Draft): Placement {
   const y = draft.start.y + Math.sign(draft.end.y - draft.start.y || 1) * height / 2
   return { x, y, width: Math.max(4, width), height: Math.max(4, height), rotation: 0 }
 }
-export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChange, info, drawMode = false, drawShape = 'ellipse', onDraw, selectionTools }: Props) {
+export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChange, info, drawMode: drawRequested = false, drawShape = 'ellipse', onDraw, selectionTools, crop, cropEdit }: Props) {
+  const drawMode = drawRequested && !cropEdit
+  // The visible part of the photo, in photo pixels: the crop (or all of it while cropping).
+  const frame = cropArea(cropEdit ? undefined : crop, photo)
+  const frameKey = `${frame.x},${frame.y},${frame.width},${frame.height}`
   const area = useRef<HTMLDivElement>(null)
   const images = useRef(new Map<string, Konva.Node>())
   const [draft, setDraft] = useState<Draft | null>(null)
@@ -104,7 +113,7 @@ export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChang
     const node = stage.current
     if (!node) return null
     const rect = node.container().getBoundingClientRect(), s = node.scaleX()
-    return { x: Math.min(photo.width, Math.max(0, (clientX - rect.left - node.x()) / s)), y: Math.min(photo.height, Math.max(0, (clientY - rect.top - node.y()) / s)) }
+    return { x: Math.min(frame.x + frame.width, Math.max(frame.x, frame.x + (clientX - rect.left - node.x()) / s)), y: Math.min(frame.y + frame.height, Math.max(frame.y, frame.y + (clientY - rect.top - node.y()) / s)) }
   }
   const draftRef = useRef<Draft | null>(null)
   const startDraft = (event: MouseEvent) => {
@@ -137,36 +146,43 @@ export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChang
     // toPhoto reads the live stage node, so the listeners only need re-binding when a draft starts or ends.
   }, [drafting, onDraw, onSelect])
   useEffect(() => { if (!drawMode) { draftRef.current = null; setDraft(null) } }, [drawMode])
-  const scale = zoom ?? fitScale(photo.width, photo.height, size.width, size.height)
-  const viewport = { width: Math.min(photo.width * scale, size.width), height: Math.min(photo.height * scale, size.height) }
+  // Entering/leaving the crop tool or changing the crop shows the new area fitted.
+  useEffect(() => { setZoom(null); setPan({ x: 0, y: 0 }) }, [frameKey])
+  // The crop tool keeps a margin around the photo so handles on the photo's edge stay whole and easy to grab.
+  const pad = cropEdit ? 14 : 0
+  const room = { width: Math.max(1, size.width - 2 * pad), height: Math.max(1, size.height - 2 * pad) }
+  const scale = zoom ?? fitScale(frame.width, frame.height, room.width, room.height)
+  const viewport = { width: Math.min(frame.width * scale, room.width) + 2 * pad, height: Math.min(frame.height * scale, room.height) + 2 * pad }
   const constrain = (point: { x: number; y: number }, nextScale = scale) => ({
-    x: Math.max(Math.min(0, Math.min(photo.width * nextScale, size.width) - photo.width * nextScale), Math.min(0, point.x)),
-    y: Math.max(Math.min(0, Math.min(photo.height * nextScale, size.height) - photo.height * nextScale), Math.min(0, point.y))
+    x: Math.max(Math.min(0, Math.min(frame.width * nextScale, room.width) - frame.width * nextScale), Math.min(0, point.x)),
+    y: Math.max(Math.min(0, Math.min(frame.height * nextScale, room.height) - frame.height * nextScale), Math.min(0, point.y))
   })
   const position = constrain(pan)
   function changeZoom(next: number, pointer?: { x: number; y: number }) {
     const nextScale = Math.max(0.01, Math.min(4, next))
-    const origin = pointer ?? { x: viewport.width / 2, y: viewport.height / 2 }
-    const target = pointer ?? { x: Math.min(photo.width * nextScale, size.width) / 2, y: Math.min(photo.height * nextScale, size.height) / 2 }
+    // Pointer positions include the crop tool's margin; pan is measured inside it.
+    const inside = pointer && { x: pointer.x - pad, y: pointer.y - pad }
+    const origin = inside ?? { x: viewport.width / 2 - pad, y: viewport.height / 2 - pad }
+    const target = inside ?? { x: Math.min(frame.width * nextScale, room.width) / 2, y: Math.min(frame.height * nextScale, room.height) / 2 }
     setPan(constrain({ x: target.x - (origin.x - position.x) / scale * nextScale, y: target.y - (origin.y - position.y) / scale * nextScale }, nextScale))
     setZoom(nextScale)
   }
   // Floating bar: screen box of the selected item's rotated bounds, placed above it (or below near the top edge).
   const selected = [...scene.stickers, ...scene.shapes, ...scene.texts, ...scene.regions].find(item => item.id === scene.selectedId)
   let toolbarAt: { left: number; top: number } | null = null
-  if (selected && selectedOnLayer && selectionTools && !moving && !draft && !panMode && !disabled) {
+  if (selected && selectedOnLayer && selectionTools && !moving && !draft && !panMode && !disabled && !cropEdit) {
     const angle = selected.rotation * Math.PI / 180, cos = Math.abs(Math.cos(angle)), sin = Math.abs(Math.sin(angle))
     const halfH = (selected.width * sin + selected.height * cos) / 2
-    const cx = selected.x * scale + position.x, top = (selected.y - halfH) * scale + position.y, bottom = (selected.y + halfH) * scale + position.y
+    const cx = (selected.x - frame.x) * scale + position.x, top = (selected.y - halfH - frame.y) * scale + position.y, bottom = (selected.y + halfH - frame.y) * scale + position.y
     // Below the box by default: the rotation handle owns the ~50px above it. Above (clear of that handle) only when there is no room below.
     const below = bottom + 14, above = top - 100
     const y = below + 36 <= viewport.height ? below : above >= 4 ? above : Math.max(4, viewport.height - 40)
     toolbarAt = { left: Math.max(90, Math.min(viewport.width - 90, cx)), top: y }
   }
   const deselect = (event: Konva.KonvaEventObject<Event>) => {
-    if (!disabled && !panMode && !drawMode && event.target === event.target.getStage()) onSelect(null)
+    if (!disabled && !panMode && !drawMode && !cropEdit && event.target === event.target.getStage()) onSelect(null)
   }
-  const interactive = !disabled && !panMode && !drawMode
+  const interactive = !disabled && !panMode && !drawMode && !cropEdit
   const regionsInteractive = !disabled && !panMode && drawMode
   const hoverCursor = (cursor: string) => (event: Konva.KonvaEventObject<MouseEvent>) => { const container = event.target.getStage()?.container(); if (container) container.style.cursor = cursor }
   const transformEnd = (id: string) => {
@@ -221,17 +237,47 @@ export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChang
     onDragStart={() => { onSelect(item.id); setMoving(item.id) }} onTransformStart={() => setMoving(item.id)}
     onDragEnd={event => { setMoving(null); onChange(item.id, { ...item, x: event.target.x(), y: event.target.y() }) }}
     onTransformEnd={() => transformEnd(item.id)} />
+  const cropTransformer = useRef<Konva.Transformer>(null)
+  const cropBox = useRef<Konva.Rect>(null)
+  const cropping = !!cropEdit
+  useEffect(() => { cropTransformer.current?.nodes(cropping && cropBox.current && !panMode ? [cropBox.current] : []) }, [cropping, panMode])
+  const readCropBox = (): CropRect | null => {
+    const node = cropBox.current
+    if (!node) return null
+    const rect = { x: node.x(), y: node.y(), width: node.width() * node.scaleX(), height: node.height() * node.scaleY() }
+    node.scale({ x: 1, y: 1 }); node.width(rect.width); node.height(rect.height)
+    return rect
+  }
+  function cropOverlay(edit: NonNullable<Props['cropEdit']>) {
+    const { x, y, width, height } = edit.rect, line = { stroke: '#ffffff', strokeWidth: 1, opacity: 0.55, strokeScaleEnabled: false, listening: false }
+    const finish = () => { const rect = readCropBox(); if (rect) edit.onChange(roundCrop(rect, edit.ratio, photo), true) }
+    return <Group>
+      {/* Everything outside the crop is dimmed. */}
+      <Shape listening={false} sceneFunc={context => {
+        const native = context._context
+        native.save(); native.beginPath(); native.rect(0, 0, photo.width, photo.height); native.rect(x, y, width, height)
+        native.fillStyle = 'rgba(15, 18, 26, 0.6)'; native.fill('evenodd'); native.restore()
+      }} />
+      {[1, 2].map(i => <Line key={`v${i}`} points={[x + width * i / 3, y, x + width * i / 3, y + height]} {...line} />)}
+      {[1, 2].map(i => <Line key={`h${i}`} points={[x, y + height * i / 3, x + width, y + height * i / 3]} {...line} />)}
+      <Rect ref={cropBox} name="crop-box" x={x} y={y} width={width} height={height} fill="transparent" stroke="#ffffff" strokeWidth={1.5} strokeScaleEnabled={false}
+        draggable={!disabled && !panMode} listening={!disabled && !panMode}
+        onMouseEnter={hoverCursor('move')} onMouseLeave={hoverCursor('')}
+        onDragMove={event => { const node = event.target, moved = moveCrop(edit.rect, node.x(), node.y(), photo); node.position({ x: moved.x, y: moved.y }); edit.onChange(moved, false) }}
+        onDragEnd={finish} onTransform={() => { const rect = readCropBox(); if (rect) edit.onChange(rect, false) }} onTransformEnd={finish} />
+    </Group>
+  }
   return <section className="canvas-editor">
     <div ref={area} className="canvas-area" data-testid="canvas-area" tabIndex={0} aria-label="사진 편집 캔버스"
     style={{ cursor: drawMode && !disabled ? 'crosshair' : undefined }}
     onMouseDownCapture={() => area.current?.focus({ preventScroll: true })}
     onMouseDown={event => { if (drawMode && !disabled && event.button === 0 && event.target === area.current) startDraft(event.nativeEvent) }}>
-    <div className="canvas-frame" data-testid="canvas-frame" data-scale={scale} data-pan-x={position.x} data-pan-y={position.y} style={{ cursor: panMode ? 'grab' : drawMode ? 'crosshair' : undefined }}>
+    <div className={`canvas-frame${cropEdit ? ' cropping' : ''}`} data-testid="canvas-frame" data-scale={scale} data-pan-x={position.x} data-pan-y={position.y} data-frame={frameKey} style={{ cursor: panMode ? 'grab' : drawMode ? 'crosshair' : undefined }}>
       {toolbarAt && <div className="selection-bar" role="toolbar" aria-label="선택 항목 도구" style={{ left: toolbarAt.left, top: toolbarAt.top }}
         onMouseDown={event => event.stopPropagation()}>{selectionTools}</div>}
-      <Stage ref={stage} width={viewport.width} height={viewport.height} x={position.x} y={position.y} scaleX={scale} scaleY={scale}
-        draggable={panMode && !disabled} dragBoundFunc={point => constrain(point)}
-        onDragEnd={event => { if (event.target === stage.current) setPan(constrain(event.target.position())) }}
+      <Stage ref={stage} width={viewport.width} height={viewport.height} x={position.x + pad} y={position.y + pad} scaleX={scale} scaleY={scale}
+        draggable={panMode && !disabled} dragBoundFunc={point => { const next = constrain({ x: point.x - pad, y: point.y - pad }); return { x: next.x + pad, y: next.y + pad } }}
+        onDragEnd={event => { if (event.target === stage.current) setPan(constrain({ x: event.target.x() - pad, y: event.target.y() - pad })) }}
         onWheel={event => {
           if (disabled || (!event.evt.ctrlKey && !event.evt.metaKey)) return
           event.evt.preventDefault()
@@ -242,7 +288,7 @@ export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChang
         }}
         onTouchStart={deselect}>
         <Layer ref={layer => { layer?.getNativeCanvasElement().setAttribute('data-testid', 'photo-content') }}>
-          <Group clipX={0} clipY={0} clipWidth={photo.width} clipHeight={photo.height}>
+          <Group x={-frame.x} y={-frame.y} clipX={frame.x} clipY={frame.y} clipWidth={frame.width} clipHeight={frame.height}>
             <CanvasImage image={adjusted?.canvas ?? photo.bitmap} width={photo.width} height={photo.height} listening={false} />
             {scene.regions.map(region => {
               const patch = patches.get(region.id)?.patch
@@ -271,10 +317,22 @@ export function EditorCanvas({ photo, assets, scene, disabled, onSelect, onChang
           </Group>
         </Layer>
         <Layer ref={layer => { layer?.getNativeCanvasElement().setAttribute('data-testid', 'editor-overlay') }}>
+          {cropEdit && cropOverlay(cropEdit)}
           <Transformer ref={transformer} enabledAnchors={selectedRegion || selectedShape ? ['top-left', 'top-center', 'top-right', 'middle-left', 'middle-right', 'bottom-left', 'bottom-center', 'bottom-right'] : ['top-left', 'top-right', 'bottom-left', 'bottom-right']}
             rotateAnchorCursor={rotationCursor}
             keepRatio={!selectedRegion && !selectedShape} flipEnabled={false} rotateEnabled={!disabled} resizeEnabled={!disabled}
             boundBoxFunc={(oldBox, newBox) => Math.abs(newBox.width) < 4 || Math.abs(newBox.height) < 4 || Math.abs(newBox.width) > 32768 * scale || Math.abs(newBox.height) > 32768 * scale ? oldBox : newBox} />
+          {cropEdit && <Transformer ref={cropTransformer} rotateEnabled={false} flipEnabled={false} keepRatio={false} ignoreStroke resizeEnabled={!disabled}
+            enabledAnchors={cropEdit.ratio ? ['top-left', 'top-right', 'bottom-left', 'bottom-right'] : ['top-left', 'top-center', 'top-right', 'middle-left', 'middle-right', 'bottom-left', 'bottom-center', 'bottom-right']}
+            anchorSize={12} anchorCornerRadius={2} anchorStroke="#5b45c9" anchorFill="#ffffff" borderStroke="#ffffff" borderStrokeWidth={1}
+            boundBoxFunc={(oldBox, newBox) => {
+              // Boxes are in screen pixels; the crop math works in photo pixels (the crop tool always shows the whole photo).
+              const node = stage.current, anchor = cropTransformer.current?.getActiveAnchor()
+              if (!node || !anchor) return oldBox
+              const toPhotoBox = (box: typeof oldBox) => ({ x: (box.x - node.x()) / scale, y: (box.y - node.y()) / scale, width: box.width / scale, height: box.height / scale })
+              const next = resizeCrop(toPhotoBox(oldBox), toPhotoBox(newBox), anchor, cropEdit.ratio, photo)
+              return { ...newBox, x: next.x * scale + node.x(), y: next.y * scale + node.y(), width: next.width * scale, height: next.height * scale }
+            }} />}
         </Layer>
       </Stage>
     </div>

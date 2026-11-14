@@ -3,6 +3,7 @@ import type { GifOptions, GifReceipt, ToolStatus, VideoInfo, VideoRef } from './
 import type { LibrarySticker, StickerMetadata, LibraryImportResult } from './library'
 import type { UpdateState } from './update'
 import type { ThumbSaveRequest } from './shapes'
+import type { CropRect } from './crop'
 export type AssetKind = 'photo' | 'sticker'
 export interface ImageAsset {
   id: string
@@ -30,7 +31,8 @@ export type Result<T> = { ok: true; value: T } | { ok: false; error: string }
 export interface PhotoBatch { photos: PhotoInfo[]; rejected: string[] }
 export interface DropBatch extends PhotoBatch { videos: VideoRef[] }
 export interface SaveReceipt { name: string; folderLabel: string }
-export interface SaveRequest { photoId: string; png: Uint8Array; output: OutputSettings }
+/** `crop` (original pixels) is the saved part of the photo; without it the whole photo is saved. */
+export interface SaveRequest { photoId: string; png: Uint8Array; output: OutputSettings; crop?: CropRect }
 export interface CloseResolution { requestId: string; action: 'close' | 'cancel' }
 export interface PhotoApi {
   onCloseRequested(callback: (requestId: string) => void): () => void

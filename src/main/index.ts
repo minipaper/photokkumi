@@ -1,12 +1,14 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, protocol, screen, session } from 'electron'
-import { mkdirSync, readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { readFile, realpath, stat, lstat, unlink } from 'node:fs/promises'
 import { basename, delimiter, dirname, extname, join, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { ImageAsset, Result, SaveRequest, SaveReceipt } from '../shared/model'
 import { imageSize } from 'image-size'
 import { orientThumbnail } from '../shared/thumbnail'
-import { inspectImage, MAX_OUTPUT_BYTES } from './images'
+import { inspectImage, MAX_OUTPUT_BYTES, MAX_PIXELS } from './images'
+import { decodeHeicInWorker, fitPixels, withIccProfile } from './heic'
+import heicWorker from './heic-worker?modulePath'
 import { saveUnique, SaveCleanupError } from './files'
 import { allowedPermission, bundleFileType, trustedSender, validSaveRequest } from './security'
 import { StickerLibrary, readBounded } from './library'
@@ -37,6 +39,17 @@ const library = new StickerLibrary(app.getPath('userData'), bytes => {
 protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true } }])
 app.enableSandbox()
 let win: BrowserWindow | null = null
+/** Converted HEIC copies live here only while the app runs (cleared at start and quit; single-instance lock). */
+const convertedDirectory = join(app.getPath('userData'), 'converted')
+/** HEIC → JPEG (quality 95, ICC kept) shrunk to the photo pixel limit; PNG when the HEIC has transparency. */
+async function convertHeic(bytes: Uint8Array): Promise<Buffer> {
+  const decoded = await decodeHeicInWorker(heicWorker, bytes)
+  let image = nativeImage.createFromBitmap(Buffer.from(decoded.pixels.buffer, decoded.pixels.byteOffset, decoded.pixels.byteLength), { width: decoded.width, height: decoded.height })
+  const size = fitPixels(decoded.width, decoded.height, MAX_PIXELS, 8192)
+  if (size.width !== decoded.width || size.height !== decoded.height) image = image.resize({ ...size, quality: 'best' })
+  if (image.isEmpty()) throw new Error('HEIC 사진을 읽지 못했습니다.')
+  return decoded.alpha ? image.toPNG() : withIccProfile(image.toJPEG(95), decoded.icc)
+}
 const photos = new PhotoStore(bytes => {
   const image = nativeImage.createFromBuffer(bytes)
   if (image.isEmpty()) throw new Error('이미지를 디코딩할 수 없습니다.')
@@ -45,7 +58,8 @@ const photos = new PhotoStore(bytes => {
   const dimensions = small.getSize()
   const oriented = orientThumbnail(small.toBitmap(), dimensions.width, dimensions.height, imageSize(bytes).orientation ?? 1)
   return nativeImage.createFromBitmap(Buffer.from(oriented.bytes), { width: oriented.width, height: oriented.height }).toDataURL()
-})
+}, { directory: convertedDirectory, convert: convertHeic })
+photos.onProgress = (done, total) => win?.webContents.send('photo:progress', { done, total })
 const outputStore = new OutputStore(app.getPath('userData'))
 // Output folder, last photo folder and window placement survive restarts (userData/prefs.json).
 const prefs = new PrefsStore(app.getPath('userData'))
@@ -76,7 +90,7 @@ const developmentUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : und
 const pageUrl = developmentUrl ? new URL(developmentUrl).href : 'app://bundle/index.html'
 
 async function choosePhotos() {
-  const result = await dialog.showOpenDialog(win!, { title: '사진 열기', defaultPath: await photoDefault(), properties: ['openFile', 'multiSelections'], filters: [{ name: 'JPG / PNG', extensions: ['jpg', 'jpeg', 'png'] }] })
+  const result = await dialog.showOpenDialog(win!, { title: '사진 열기', defaultPath: await photoDefault(), properties: ['openFile', 'multiSelections'], filters: [{ name: '사진 (JPG·PNG·HEIC)', extensions: ['jpg', 'jpeg', 'png', 'heic', 'heif'] }] })
   if (result.canceled || !result.filePaths.length) return null
   remember({ photoFolder: dirname(result.filePaths[0]) })
   return photos.add(result.filePaths)
@@ -294,6 +308,7 @@ function createWindow(saved: WindowBounds | null = null) {
 
 app.whenReady().then(() => {
   if (!primaryInstance) { app.quit(); return }
+  clearConverted()
   // Keep a rejected load promise so a damaged manifest can never become an empty overwrite.
   // Default stickers are added once per pack after the library loads; list requests wait for it.
   // A failure here only skips the defaults (retried next start) and never blocks the user's library.
@@ -516,5 +531,8 @@ app.on('before-quit', event => {
     win.close()
   }
 })
+
+function clearConverted() { try { rmSync(convertedDirectory, { recursive: true, force: true }) } catch { /* retried next start */ } }
+app.on('will-quit', () => { if (primaryInstance) clearConverted() })
 
 app.on('second-instance', () => { win?.restore(); win?.focus() })

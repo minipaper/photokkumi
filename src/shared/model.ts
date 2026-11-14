@@ -49,6 +49,8 @@ export interface PhotoApi {
   readPhoto(id: string): Promise<Result<ImageAsset>>
   choosePhotoFolder(): Promise<Result<PhotoBatch | null>>
   importDroppedFiles(files: File[]): Promise<Result<DropBatch>>
+  /** Files finished so far while a batch is being opened (HEIC conversion takes about a second per photo). */
+  onPhotoProgress(callback: (done: number, total: number) => void): () => void
   getUpdateState(): Promise<Result<UpdateState>>
   checkForUpdate(): Promise<Result<UpdateState>>
   downloadUpdate(): Promise<Result<UpdateState>>

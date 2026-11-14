@@ -36,6 +36,14 @@ const api: PhotoApi = {
     const paths = droppedPaths(files)
     return paths.length ? ipcRenderer.invoke('library:drop', paths) : Promise.resolve({ ok: false, error: '끌어 놓은 항목에서 파일을 찾지 못했습니다.' })
   },
+  onPhotoProgress: callback => {
+    const listener = (_event: unknown, value: unknown) => {
+      const { done, total } = (value ?? {}) as { done?: unknown; total?: unknown }
+      if (Number.isInteger(done) && Number.isInteger(total) && (done as number) >= 0 && (done as number) <= (total as number) && (total as number) <= 200) callback(done as number, total as number)
+    }
+    ipcRenderer.on('photo:progress', listener)
+    return () => { ipcRenderer.removeListener('photo:progress', listener) }
+  },
   removePhoto: id => ipcRenderer.invoke('photo:remove', id),
   getUpdateState: () => ipcRenderer.invoke('update:get'),
   checkForUpdate: () => ipcRenderer.invoke('update:check'),

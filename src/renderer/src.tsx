@@ -66,6 +66,8 @@ function App() {
     const off = window.photokkumi.onUpdateState(state => setUpdate(state))
     return () => { alive = false; off() }
   }, [])
+  // HEIC photos take about a second each to convert, so a batch reports how far it got.
+  useEffect(() => window.photokkumi.onPhotoProgress((done, total) => setStatus(`사진 불러오는 중… ${done}/${total}`)), [])
   const [dragging, setDragging] = useState<false | 'photos' | 'stickers'>(false)
   // Numeric position fields stay folded until wanted; the choice is a per-viewer convenience.
   const [fieldsOpen, setFieldsOpen] = useState(() => { try { return localStorage.getItem('pk.placementFields') === 'open' } catch { return false } })
@@ -980,7 +982,7 @@ function App() {
     }}>
     {dragging && <div className={`drop-overlay ${dragging}`} aria-hidden="true">{dragging === 'stickers'
       ? <div><strong>놓으면 스티커로 등록합니다</strong><span>투명 배경 PNG 파일</span></div>
-      : <div><strong>여기에 놓으면 불러옵니다</strong><span>JPG·PNG 사진, 사진이 든 폴더, MOV·MP4 동영상 · 스티커 목록 위에 놓으면 스티커로 등록</span></div>}</div>}
+      : <div><strong>여기에 놓으면 불러옵니다</strong><span>JPG·PNG·HEIC 사진, 사진이 든 폴더, MOV·MP4 동영상 · 스티커 목록 위에 놓으면 스티커로 등록</span></div>}</div>}
     <dialog ref={libraryDialog} className="library-dialog" aria-label="스티커 관리" onCancel={event => { event.preventDefault(); closeLibrary() }}>
       {libraryOpen && <>
         <div className="manager-heading"><h2>스티커 관리</h2><button disabled={busy} onClick={closeLibrary}>관리 닫기</button></div>
@@ -1099,7 +1101,7 @@ function App() {
             const area = cropArea(cropMode && cropDraft ? cropDraft.crop : scene.crop, photo), cut = area.width !== photo.width || area.height !== photo.height
             return <>{photo.name} · {photo.width} × {photo.height} px{cut ? ` → 자르기 ${area.width} × ${area.height}` : ''}{outputLabel && outputLabel !== `${area.width} × ${area.height} px` ? ` → ${outputLabel}` : ''} · <b className={dirty || cropPending ? 'dirty' : ''}>{dirty || cropPending ? '수정됨' : '원본 / 저장됨'}</b></>
           })()} />
-          : <div className="empty"><div className="drop-target"><strong>사진을 이 창으로 끌어다 놓으세요</strong><span>탐색기에서 JPG·PNG 사진 여러 장이나 폴더를 한 번에 끌어 놓으면 바로 불러옵니다.</span><span>또는 위의 <b>사진 열기</b> · <b>폴더 열기</b></span></div></div>}
+          : <div className="empty"><div className="drop-target"><strong>사진을 이 창으로 끌어다 놓으세요</strong><span>탐색기에서 JPG·PNG·HEIC 사진 여러 장이나 폴더를 한 번에 끌어 놓으면 바로 불러옵니다.</span><span>또는 위의 <b>사진 열기</b> · <b>폴더 열기</b></span></div></div>}
       </div>
       <aside>
         {mode === 'thumb' ? <>

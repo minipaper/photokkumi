@@ -11,7 +11,7 @@ export function inspectImage(bytes: Uint8Array, kind: AssetKind, output = false)
   }
   const png = Buffer.from(bytes.subarray(0, 8)).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
   const jpeg = bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255
-  if (!png && (!jpeg || kind === 'sticker' || output)) throw new Error('사진은 JPG/PNG, 스티커는 PNG만 지원합니다.')
+  if (!png && (!jpeg || kind === 'sticker' || output)) throw new Error('사진은 JPG/PNG/HEIC, 스티커는 PNG만 지원합니다.')
   let dimensions: ReturnType<typeof imageSize>
   try { dimensions = imageSize(bytes) } catch { throw new Error('이미지 헤더가 손상되었습니다.') }
   let { width, height } = dimensions

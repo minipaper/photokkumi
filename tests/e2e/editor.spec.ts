@@ -191,7 +191,7 @@ test('안전한 창 설정·IPC 거부·잘못된 이미지 거부', async () =>
     return { sandbox: p.sandbox, contextIsolation: p.contextIsolation, nodeIntegration: p.nodeIntegration }
   })
   expect(prefs).toEqual({ sandbox: true, contextIsolation: true, nodeIntegration: false })
-  expect(await page.evaluate(() => Object.keys(window.photokkumi).sort())).toEqual(['backupLibrary', 'cancelGif', 'checkForUpdate', 'chooseGifTool', 'chooseOutputFolder', 'choosePhotoFolder', 'choosePhotos', 'createGif', 'deleteSticker', 'downloadUpdate', 'getOutputFolder', 'getOutputSettings', 'getUpdateState', 'gifToolStatus', 'importDroppedFiles', 'importDroppedStickers', 'importStickers', 'installUpdate', 'listStickers', 'loadVideo', 'locateGifTool', 'onCloseRequested', 'onGifProgress', 'onUpdateState', 'openVideo', 'readPhoto', 'removePhoto', 'resolveClose', 'restoreLibrary', 'saveImage', 'saveThumbnail', 'setStickerReferences', 'updateOutputSettings', 'updateSticker', 'useSticker'])
+  expect(await page.evaluate(() => Object.keys(window.photokkumi).sort())).toEqual(['backupLibrary', 'cancelGif', 'checkForUpdate', 'chooseGifTool', 'chooseOutputFolder', 'choosePhotoFolder', 'choosePhotos', 'createGif', 'deleteSticker', 'downloadUpdate', 'getOutputFolder', 'getOutputSettings', 'getUpdateState', 'gifToolStatus', 'importDroppedFiles', 'importDroppedStickers', 'importStickers', 'installUpdate', 'listStickers', 'loadVideo', 'locateGifTool', 'onCloseRequested', 'onGifProgress', 'onPhotoProgress', 'onUpdateState', 'openVideo', 'readPhoto', 'removePhoto', 'resolveClose', 'restoreLibrary', 'saveImage', 'saveThumbnail', 'setStickerReferences', 'updateOutputSettings', 'updateSticker', 'useSticker'])
   expect(await page.evaluate(() => typeof (window as unknown as { require?: unknown }).require)).toBe('undefined')
   const invalid = await page.evaluate(() => window.photokkumi.saveImage({ photoId: '../../anything', png: new Uint8Array(), output: { format: 'png', resizeEnabled: false, resizeBasis: 'width', landscapeSize: 1600, portraitSize: 900, preventUpscale: true, quality: 100 } }))
   expect(invalid.ok).toBe(false)
@@ -260,6 +260,48 @@ test('EXIF 회전 JPG를 한 번만 회전하고 메타데이터 없이 저장�
   expect(pixel(resized as unknown as PNG, 10, 5)[0]).toBeGreaterThan(230)
   expect(pixel(resized as unknown as PNG, 10, 25)[1]).toBeGreaterThan(230)
   expect(jpgBytes.includes(Buffer.from('Exif'))).toBe(false)
+})
+
+test('HEIC: 아이폰 사진을 열어 원본 그대로 두고 저장하며, Display P3 색을 보정하고 큰 사진은 1,600만 화소로 줄인다', async () => {
+  const fixture = (name: string) => readFile(resolve('tests/fixtures', name))
+  const srgb = join(directory, '아이폰.HEIC'), p3 = join(directory, 'p3.heic'), big = join(directory, '큰 사진.heic')
+  await writeFile(srgb, await fixture('quad-srgb.heic')); await writeFile(p3, await fixture('quad-p3.heic')); await writeFile(big, await fixture('quad-24mp.heic'))
+  const hash = async (path: string) => createHash('sha256').update(await readFile(path)).digest('hex')
+  const before = await Promise.all([srgb, p3, big].map(hash))
+  await select([srgb, p3, big]); await page.getByRole('button', { name: '사진 열기', exact: true }).click()
+  await expect(page.getByRole('button', { name: '사진 1: 아이폰.HEIC', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('button', { name: /^사진 \d+:/ })).toHaveCount(3)
+  await expect(page.getByRole('status')).toContainText('사진 3장 추가')
+  const cache = join(directory, 'profile', 'converted')
+  expect(await readdir(cache)).toHaveLength(3)
+  const near = (actual: number[], expected: number[], tolerance = 10) => expected.forEach((value, index) => expect(Math.abs(actual[index] - value), `${actual} ≈ ${expected}`).toBeLessThanOrEqual(tolerance))
+
+  await save()
+  const plain = await output('아이폰_kkumi.png')
+  expect([plain.width, plain.height]).toEqual([96, 64])
+  near(pixel(plain, 10, 10), [200, 60, 60, 255]); near(pixel(plain, 80, 10), [60, 180, 60, 255])
+  near(pixel(plain, 10, 50), [60, 60, 200, 255]); near(pixel(plain, 80, 50), [128, 128, 128, 255])
+
+  // The same numbers tagged Display P3 are more saturated once converted to sRGB (red ≈ 218, 42, 52).
+  await page.getByRole('button', { name: '사진 2: p3.heic', exact: true }).click()
+  await expect(page.getByRole('status')).toContainText('p3.heic · 편집 중')
+  await save()
+  const wide = await output('p3_kkumi.png')
+  expect(pixel(wide, 10, 10)[0]).toBeGreaterThanOrEqual(210)
+  expect(pixel(wide, 10, 10)[1]).toBeLessThanOrEqual(52)
+
+  await page.getByRole('button', { name: '사진 3: 큰 사진.heic', exact: true }).click()
+  await expect(page.getByRole('status')).toContainText('큰 사진.heic · 편집 중')
+  await save()
+  const large = await output('큰 사진_kkumi.png')
+  expect([large.width, large.height]).toEqual([4618, 3464])
+  near(pixel(large, 100, 100), [200, 60, 60, 255]); near(pixel(large, 4500, 3400), [128, 128, 128, 255])
+
+  expect(await Promise.all([srgb, p3, big].map(hash))).toEqual(before)
+  await page.getByRole('button', { name: 'p3.heic 목록에서 제거', exact: true }).click()
+  await expect.poll(async () => (await readdir(cache)).length).toBe(2)
+  await app.close()
+  await expect.poll(async () => readdir(cache).then(() => 'exists', () => 'gone')).toBe('gone')
 })
 
 async function requestClose(quit = false) {

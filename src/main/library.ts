@@ -122,6 +122,15 @@ export class StickerLibrary {
     const stickers = this.list()
     return { stickers, importedIds: candidates.map(item => stickers.find(asset => asset.hash === item.asset.hash)!.id) }
   }
+  /** PNGs made in the sticker maker (already encoded by the renderer; normalized again here like any import). */
+  async importImages(items: { name: string; bytes: Uint8Array }[], category: string) {
+    this.list()
+    if (!items.length || items.length > MAX_STICKERS) throw new Error('한 번에 1~100개까지 추가할 수 있습니다.')
+    const candidates = items.map(item => this.prepare(item.bytes, { name: item.name.slice(0, 80), originalName: `${item.name}.png`.slice(0, 255), category, favorite: false }))
+    await this.merge(candidates)
+    const stickers = this.list()
+    return { stickers, importedIds: candidates.map(item => stickers.find(asset => asset.hash === item.asset.hash)!.id) }
+  }
   /**
    * App-shipped stickers. Unlike a user import this never fails on the library limit: duplicates
    * (already registered by hash) are skipped and only as many as still fit are added.

@@ -1,5 +1,5 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
-import { mkdtemp, readFile, writeFile, rm, readdir, realpath } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, writeFile, rm, readdir, realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -191,7 +191,7 @@ test('안전한 창 설정·IPC 거부·잘못된 이미지 거부', async () =>
     return { sandbox: p.sandbox, contextIsolation: p.contextIsolation, nodeIntegration: p.nodeIntegration }
   })
   expect(prefs).toEqual({ sandbox: true, contextIsolation: true, nodeIntegration: false })
-  expect(await page.evaluate(() => Object.keys(window.photokkumi).sort())).toEqual(['backupLibrary', 'cancelGif', 'checkForUpdate', 'chooseGifTool', 'chooseOutputFolder', 'choosePhotoFolder', 'choosePhotos', 'createGif', 'deleteSticker', 'downloadUpdate', 'getOutputFolder', 'getOutputSettings', 'getUpdateState', 'gifToolStatus', 'importDroppedFiles', 'importDroppedStickers', 'importStickers', 'installUpdate', 'listStickers', 'loadVideo', 'locateGifTool', 'onCloseRequested', 'onGifProgress', 'onPhotoProgress', 'onUpdateState', 'openVideo', 'readPhoto', 'removePhoto', 'resolveClose', 'restoreLibrary', 'saveImage', 'saveThumbnail', 'setStickerReferences', 'updateOutputSettings', 'updateSticker', 'useSticker'])
+  expect(await page.evaluate(() => Object.keys(window.photokkumi).sort())).toEqual(['addMakerStickers', 'backupLibrary', 'cancelGif', 'checkForUpdate', 'chooseGifTool', 'chooseOutputFolder', 'choosePhotoFolder', 'choosePhotos', 'createGif', 'deleteSticker', 'downloadUpdate', 'getOutputFolder', 'getOutputSettings', 'getUpdateState', 'gifToolStatus', 'importDroppedFiles', 'importDroppedStickers', 'importStickers', 'installUpdate', 'listStickers', 'loadVideo', 'locateGifTool', 'onCloseRequested', 'onGifProgress', 'onPhotoProgress', 'onUpdateState', 'openVideo', 'readPhoto', 'removePhoto', 'resolveClose', 'restoreLibrary', 'saveImage', 'saveMakerStickers', 'saveThumbnail', 'setStickerReferences', 'updateOutputSettings', 'updateSticker', 'useSticker'])
   expect(await page.evaluate(() => typeof (window as unknown as { require?: unknown }).require)).toBe('undefined')
   const invalid = await page.evaluate(() => window.photokkumi.saveImage({ photoId: '../../anything', png: new Uint8Array(), output: { format: 'png', resizeEnabled: false, resizeBasis: 'width', landscapeSize: 1600, portraitSize: 900, preventUpscale: true, quality: 100 } }))
   expect(invalid.ok).toBe(false)
@@ -199,6 +199,10 @@ test('안전한 창 설정·IPC 거부·잘못된 이미지 거부', async () =>
   expect((await page.evaluate(() => window.photokkumi.importDroppedFiles([new File(['x'], '/etc/passwd')]))).ok).toBe(false)
   expect((await page.evaluate(() => window.photokkumi.importDroppedStickers([new File(['x'], '/etc/passwd')]))).ok).toBe(false)
   expect((await page.evaluate(() => window.photokkumi.removePhoto('../../anything'))).ok).toBe(false)
+  // Sticker maker: malformed requests and non-PNG bytes are refused before any dialog or file write.
+  expect((await page.evaluate(() => window.photokkumi.saveMakerStickers({ items: [{ name: '../x', png: [1, 2] as unknown as Uint8Array }], category: '' }))).ok).toBe(false)
+  expect((await page.evaluate(() => window.photokkumi.addMakerStickers({ items: [{ name: 'x', png: new TextEncoder().encode('<svg/>') }], category: '공정위' }))).ok).toBe(false)
+  expect((await page.evaluate(() => window.photokkumi.saveMakerStickers({ items: [{ name: 'x', png: new Uint8Array([0xff, 0xd8, 0xff, 0xe0]) }], category: '' }))).ok).toBe(false)
   // Auto-update is off outside a packaged Windows build; the version label stays, actions are refused.
   const version = (JSON.parse(await readFile(resolve('package.json'), 'utf8')) as { version: string }).version
   await expect(page.getByRole('button', { name: `v${version}`, exact: true })).toBeDisabled()
@@ -1751,4 +1755,96 @@ test('GIF 만들기: ffmpeg 미설치 안내·위치 지정, 회전 HEVC MOV 드
   await page.getByRole('tab', { name: '사진 편집' }).click()
   await expect(page.getByText('사진을 이 창으로 끌어다 놓으세요')).toBeVisible()
   expect(errors).toEqual([])
+})
+
+test('스티커 만들기: 문구·내용·색 고르기, 투명 PNG 저장·이름 충돌, 라이브러리 공정위 분류, 여러 문구 한 번에, 소제목, 내 스티커·재실행 유지', async () => {
+  await page.getByRole('tab', { name: '스티커 만들기', exact: true }).click()
+  const preview = page.locator('[data-testid=maker-preview] canvas')
+  await expect(preview).toBeVisible()
+  await expect(page.getByRole('button', { name: /^디자인: / })).toHaveCount(10)
+  await expect(page.getByRole('button', { name: '디자인: 둥근 라벨' })).toHaveAttribute('aria-pressed', 'true')
+  // A phrase fills the fields; the content tab edits them.
+  await page.getByRole('tab', { name: '문구', exact: true }).click()
+  await page.getByRole('button', { name: /^원고료 지원/ }).click()
+  await page.getByRole('tab', { name: '내용', exact: true }).click()
+  await expect(page.getByRole('textbox', { name: '스티커 제목' })).toHaveValue('원고료 지원')
+  await expect(page.getByRole('textbox', { name: '스티커 문장' })).toHaveValue('본 포스팅은 업체로부터\n[원고료]를 지원받아\n솔직하게 작성한 후기입니다')
+  await page.getByRole('textbox', { name: '스티커 문장' }).fill('포토꾸미로부터 [원고료]를 지원받아\n솔직하게 작성했습니다')
+  await page.getByRole('radio', { name: '아이콘: 하트' }).click()
+  await page.getByRole('tab', { name: '스타일', exact: true }).click()
+  await page.getByRole('radio', { name: '강조색: 분홍' }).click()
+  await page.getByRole('radio', { name: '크게', exact: true }).click()
+  await expect(page.getByTestId('maker-size')).toContainText('px')
+  const [width, height] = (await page.getByTestId('maker-size').innerText()).match(/\d+/g)!.map(Number)
+  // Save asks for the output folder once, then reuses it; the same name gets _1.
+  const out = join(directory, '스티커 결과')
+  await mkdir(out)
+  await select(out)
+  await page.getByRole('button', { name: 'PNG로 저장' }).click()
+  await expect(page.getByRole('status')).toContainText('스티커 저장 완료 · 원고료 지원.png')
+  await page.keyboard.press('ControlOrMeta+s')
+  await expect(page.getByRole('status')).toContainText('원고료 지원_1.png')
+  const png = PNG.sync.read(await readFile(join(out, '원고료 지원.png')))
+  expect([png.width, png.height]).toEqual([width, height])
+  const alpha = (x: number, y: number) => png.data[(y * png.width + x) * 4 + 3]
+  expect([alpha(0, 0), alpha(png.width - 1, 0), alpha(0, png.height - 1), alpha(png.width - 1, png.height - 1)]).toEqual([0, 0, 0, 0])
+  let pinkLabel = 0, darkText = 0, pinkText = 0
+  for (let i = 0; i < png.data.length; i += 4) {
+    const [r, g, b, a] = png.data.subarray(i, i + 4)
+    if (a < 250) continue
+    if (Math.abs(r - 250) < 4 && Math.abs(g - 225) < 4 && Math.abs(b - 238) < 4) pinkLabel++
+    if (r < 90 && g < 90 && b < 100) darkText++
+    if (r > 200 && g < 130 && b > 140 && b < 190) pinkText++
+  }
+  expect(pinkLabel).toBeGreaterThan(500)
+  expect(darkText).toBeGreaterThan(200)
+  expect(pinkText).toBeGreaterThan(30)
+  // Add to the library: the sticker lands in the 공정위 category and is usable in the photo editor.
+  await page.getByRole('button', { name: '라이브러리에 추가' }).click()
+  await expect(page.getByRole('status')).toContainText("'공정위' 분류에 추가했습니다")
+  const listed = await page.evaluate(async () => { const result = await window.photokkumi.listStickers(); return result.ok ? result.value.map(item => [item.name, item.category]) : [] })
+  expect(listed).toEqual([['원고료 지원', '공정위']])
+  // Several phrases at once with the current design and colors.
+  await page.getByRole('button', { name: '여러 문구 한 번에…' }).click()
+  const dialog = page.getByRole('dialog', { name: '여러 문구 한 번에 만들기' })
+  await dialog.getByRole('checkbox', { name: '모두 선택' }).uncheck()
+  await dialog.getByRole('checkbox', { name: '식사권 제공' }).check()
+  await dialog.getByRole('checkbox', { name: '내돈내산' }).first().check()
+  await dialog.getByRole('button', { name: 'PNG 2개 저장' }).click()
+  await expect(page.getByRole('status')).toContainText('스티커 2개 저장 완료')
+  expect((await readdir(out)).sort()).toEqual(['내돈내산.png', '식사권 제공.png', '원고료 지원.png', '원고료 지원_1.png'])
+  // A heading design keeps its own content; switching back keeps the notice edits.
+  await page.getByRole('tab', { name: '디자인', exact: true }).click()
+  await page.getByRole('radio', { name: '소제목', exact: true }).click()
+  await expect(page.getByRole('button', { name: /^디자인: / })).toHaveCount(6)
+  await page.getByRole('button', { name: '디자인: 말풍선' }).click()
+  await page.getByRole('tab', { name: '내용', exact: true }).click()
+  await expect(page.getByRole('textbox', { name: '스티커 제목' })).toHaveValue('[위치] 안내')
+  await expect(page.getByRole('textbox', { name: '스티커 문장' })).toHaveCount(0)
+  await page.getByRole('textbox', { name: '스티커 작은 글' }).fill('주차는 건물 뒤편')
+  await page.getByRole('button', { name: 'PNG로 저장' }).click()
+  await expect(page.getByRole('status')).toContainText('위치 안내.png')
+  await page.getByRole('tab', { name: '디자인', exact: true }).click()
+  await page.getByRole('radio', { name: '내 스티커' }).click()
+  await page.getByRole('button', { name: /지금 스티커 저장/ }).click()
+  await expect(page.getByRole('button', { name: '내 스티커 1: 위치 안내' })).toBeVisible()
+  await page.getByRole('radio', { name: '공정위', exact: true }).click()
+  await page.getByRole('button', { name: '디자인: 연한 카드' }).click()
+  await page.getByRole('tab', { name: '내용', exact: true }).click()
+  await expect(page.getByRole('textbox', { name: '스티커 문장' })).toHaveValue('포토꾸미로부터 [원고료]를 지원받아\n솔직하게 작성했습니다')
+  // Everything (design, both contents, colors, my stickers) survives a restart.
+  await restartWithLibrary()
+  await page.getByRole('tab', { name: '스티커 만들기', exact: true }).click()
+  await expect(page.getByRole('button', { name: '디자인: 연한 카드' })).toHaveAttribute('aria-pressed', 'true')
+  await page.getByRole('radio', { name: '내 스티커' }).click()
+  await page.getByRole('button', { name: '내 스티커 1: 위치 안내' }).click()
+  await page.getByRole('tab', { name: '내용', exact: true }).click()
+  await expect(page.getByRole('textbox', { name: '스티커 작은 글' })).toHaveValue('주차는 건물 뒤편')
+  await page.getByRole('tab', { name: '스타일', exact: true }).click()
+  await expect(page.getByRole('radio', { name: '강조색: 분홍' })).toHaveAttribute('aria-checked', 'true')
+  await expect(page.getByRole('radio', { name: '크게', exact: true })).toHaveAttribute('aria-checked', 'true')
+  // Back in the photo editor the made sticker is in the library under 공정위.
+  await page.getByRole('tab', { name: '사진 편집' }).click()
+  await select(source); await page.getByRole('button', { name: '사진 열기', exact: true }).click()
+  await expect(page.getByRole('button', { name: '원고료 지원 배치', exact: true })).toBeVisible()
 })

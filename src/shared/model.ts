@@ -4,6 +4,7 @@ import type { LibrarySticker, StickerMetadata, LibraryImportResult } from './lib
 import type { UpdateState } from './update'
 import type { ThumbSaveRequest } from './shapes'
 import type { CropRect } from './crop'
+import type { MakerRequest, MakerSaveReceipt } from './sticker-maker'
 export type AssetKind = 'photo' | 'sticker'
 export interface ImageAsset {
   id: string
@@ -76,6 +77,10 @@ export interface PhotoApi {
   saveImage(request: SaveRequest): Promise<Result<SaveReceipt | null>>
   /** Saves a 1080×1080 thumbnail as <photo>_thumb.jpg/png in the output folder. */
   saveThumbnail(request: ThumbSaveRequest): Promise<Result<SaveReceipt | null>>
+  /** Sticker maker: saves each PNG as <name>.png in the output folder (null when the folder choice is cancelled). */
+  saveMakerStickers(request: MakerRequest): Promise<Result<MakerSaveReceipt | null>>
+  /** Sticker maker: adds the PNGs to the sticker library under `category`. */
+  addMakerStickers(request: MakerRequest): Promise<Result<LibraryImportResult>>
 }
 export function fitScale(width: number, height: number, availableWidth: number, availableHeight: number): number {
   return Math.min(1, Math.max(1, availableWidth) / width, Math.max(1, availableHeight) / height)

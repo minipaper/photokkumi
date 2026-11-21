@@ -71,6 +71,8 @@ const api: PhotoApi = {
   getOutputSettings: () => ipcRenderer.invoke('output:get'),
   updateOutputSettings: output => ipcRenderer.invoke('output:update', output),
   saveImage: (request) => ipcRenderer.invoke('photo:save', request),
-  saveThumbnail: request => ipcRenderer.invoke('thumb:save', request)
+  saveThumbnail: request => ipcRenderer.invoke('thumb:save', request),
+  saveMakerStickers: request => ipcRenderer.invoke('maker:save', request),
+  addMakerStickers: request => ipcRenderer.invoke('maker:library', request)
 }
 contextBridge.exposeInMainWorld('photokkumi', api)

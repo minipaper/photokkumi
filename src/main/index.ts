@@ -25,6 +25,7 @@ import { autoUpdater } from 'electron-updater'
 import { UpdateController } from './updater'
 import { PrefsStore, type WindowBounds } from './prefs'
 import { MAX_BACKUP_BYTES, validAssetId, validMetadata } from '../shared/library'
+import { validMakerRequest, type MakerRequest, type MakerSaveReceipt } from '../shared/sticker-maker'
 
 const profile = app.commandLine.getSwitchValue('user-data-dir')
 if (profile) { mkdirSync(resolve(profile), { recursive: true }); app.setPath('userData', resolve(profile)) }
@@ -267,6 +268,38 @@ async function saveThumbnail(request: ThumbSaveRequest): Promise<SaveReceipt | n
   }
 }
 
+/** Sticker maker PNGs: decoded and re-encoded (nothing from the incoming bytes is copied), then validated like a sticker import. */
+function encodeMakerItems(request: MakerRequest) {
+  return request.items.map(item => {
+    inspectImage(item.png, 'sticker')
+    const image = nativeImage.createFromBuffer(Buffer.from(item.png))
+    if (image.isEmpty()) throw new Error('스티커 이미지가 손상되었습니다.')
+    const bytes = image.toPNG()
+    inspectImage(bytes, 'sticker')
+    return { name: item.name.trim(), bytes }
+  })
+}
+/** Saves each sticker as <name>.png in the output folder (asks for one first if none); existing files get _1, _2…. */
+async function saveMakerStickers(request: MakerRequest): Promise<MakerSaveReceipt | null> {
+  const items = encodeMakerItems(request)
+  let directory = outputDirectory
+  if (!directory) {
+    const selected = await dialog.showOpenDialog(win!, { title: '스티커를 저장할 폴더', properties: ['openDirectory', 'createDirectory'] })
+    if (selected.canceled || !selected.filePaths[0]) return null
+    directory = selected.filePaths[0]
+  }
+  const target = await realpath(directory)
+  const names: string[] = []
+  try {
+    for (const item of items) names.push(basename(await saveUnique(target, `${item.name}.png`, item.bytes, '.png', '')))
+  } catch (error) {
+    if (error instanceof SaveCleanupError) throw error
+    throw new Error(`${names.length ? `${names.length}개를 저장한 뒤 ` : ''}저장하지 못했습니다. 폴더 권한·여유 공간을 확인하세요.`, { cause: error })
+  }
+  setOutputDirectory(target)
+  return { names, folderLabel: target }
+}
+
 /** Restore the last window placement only while it is still mostly on a connected display. */
 function visibleBounds(bounds: WindowBounds | null): WindowBounds | null {
   if (!bounds) return null
@@ -459,6 +492,21 @@ app.whenReady().then(() => {
       busy = true
       try { await loadedLibrary; return { ok: true, value: await action(...args) } }
       catch (error) { return { ok: false, error: error instanceof Error ? error.message : '라이브러리 작업에 실패했습니다.' } }
+      finally { busy = false }
+    })
+  }
+  const makerActions: Record<string, (request: MakerRequest) => Promise<unknown>> = {
+    'maker:save': saveMakerStickers,
+    'maker:library': async request => { await loadedLibrary; return library.importImages(encodeMakerItems(request), request.category) }
+  }
+  for (const [channel, action] of Object.entries(makerActions)) {
+    ipcMain.handle(channel, async (event, ...args: unknown[]): Promise<Result<unknown>> => {
+      if (!win || !trustedSender(event.sender.id, win.webContents.id, event.senderFrame === win.webContents.mainFrame, event.senderFrame?.url ?? '', pageUrl)) return { ok: false, error: '허용되지 않은 요청입니다.' }
+      if (args.length !== 1 || !validMakerRequest(args[0])) return { ok: false, error: '유효하지 않은 스티커 요청입니다.' }
+      if (busy) return { ok: false, error: '현재 작업이 끝난 뒤 다시 시도하세요.' }
+      busy = true
+      try { return { ok: true, value: await action(args[0]) } }
+      catch (error) { return { ok: false, error: error instanceof Error ? error.message : '스티커를 저장하지 못했습니다.' } }
       finally { busy = false }
     })
   }

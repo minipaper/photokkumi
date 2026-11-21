@@ -6,6 +6,7 @@ import type { LibrarySticker, StickerMetadata } from '../shared/library'
 import { LibraryPanel } from './LibraryPanel'
 import { EditorCanvas } from './EditorCanvas'
 import { GifMaker } from './GifMaker'
+import { StickerMaker } from './StickerMaker'
 import type { VideoRef } from '../shared/gif'
 import type { UpdateState } from '../shared/update'
 import { loadPref, savePref } from './remember'
@@ -105,7 +106,7 @@ function App() {
   function storeMyPresets(next: MyPreset[]) { setMyPresets(next); savePref('pk.textPresets', next) }
   const textArea = useRef<HTMLTextAreaElement>(null)
   const focusNewText = useRef(false)
-  const [mode, setMode] = useState<'photo' | 'gif' | 'thumb'>('photo')
+  const [mode, setMode] = useState<'photo' | 'gif' | 'thumb' | 'maker'>('photo')
   type ThumbTab = 'template' | 'background' | 'text' | 'deco'
   const [thumbTab, setThumbTab] = useState<ThumbTab>('template')
   const [templateFilter, setTemplateFilter] = useState<TemplateFilter>('all')
@@ -131,6 +132,7 @@ function App() {
   const [cropPortrait, setCropPortrait] = useState(false)
   const [incomingVideo, setIncomingVideo] = useState<{ ref: VideoRef; nonce: number } | null>(null)
   const [gifBusy, setGifBusy] = useState(false)
+  const [makerBusy, setMakerBusy] = useState(false)
   const showError = useCallback((text: string) => setError(text), [])
   const showStatus = useCallback((text: string) => setStatus(text), [])
   const activeSession = photo ? sessions.current.get(photo.id) : undefined
@@ -495,7 +497,7 @@ function App() {
   }
   function handleEditorKey(event: KeyboardEvent<HTMLElement>) {
     const target = event.target
-    if (mode === 'gif') return
+    if (mode === 'gif' || mode === 'maker') return
     if (event.defaultPrevented || event.nativeEvent.isComposing || event.altKey
       || operation.current || closeRequest || pendingPhoto || libraryOpen || (target instanceof HTMLElement
         && (target.isContentEditable || target.closest('input, textarea, select, dialog, [role="textbox"]')))) return
@@ -782,10 +784,10 @@ function App() {
     const next = emptyHistory()
     currentHistory.current = next; setHistory(next); setDirty(false); setStatus('사진을 열어 시작하세요.')
   }
-  const switchMode = (next: 'photo' | 'gif' | 'thumb') => {
+  const switchMode = (next: 'photo' | 'gif' | 'thumb' | 'maker') => {
     if (next === mode) return
     setSettingsOpen(false)
-    if (next === 'gif' || (next === 'photo' && activeId.current !== THUMB)) { commitLive(); setMode(next); return }
+    if (next === 'gif' || next === 'maker' || (next === 'photo' && activeId.current !== THUMB)) { commitLive(); setMode(next); return }
     void run(async () => {
       commitLive()
       if (next === 'thumb') await openThumbSession(); else await restorePhotoSession()
@@ -931,7 +933,7 @@ function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
   const hasFiles = (event: DragEvent) => Array.from(event.dataTransfer.types).includes('Files')
-  const dropBlocked = busy || gifBusy || !!pendingPhoto || !!closeRequest || libraryOpen
+  const dropBlocked = busy || gifBusy || makerBusy || !!pendingPhoto || !!closeRequest || libraryOpen
   const effect: RegionEffect = region ? { style: region.style, strength: region.strength, shape: region.shape ?? 'ellipse' } : regionDefaults
   const numericFields = selection ? <div className="placement-detail">
     <button className="disclosure" aria-expanded={fieldsOpen} onClick={toggleFields}><span className="chevron" aria-hidden="true">▸</span>위치·크기 숫자로 조정</button>
@@ -1012,9 +1014,10 @@ function App() {
     <header className="toolbar">
       <h1>포토꾸미</h1>
       <div className="mode-tabs" role="tablist" aria-label="작업 모드">
-        <button role="tab" aria-selected={mode === 'photo'} disabled={gifBusy} onClick={() => switchMode('photo')}><span className="label">사진 편집</span><span className="label-short">사진</span></button>
-        <button role="tab" aria-selected={mode === 'thumb'} disabled={busy || gifBusy} onClick={() => switchMode('thumb')}><span className="label">썸네일 만들기</span><span className="label-short">썸네일</span></button>
-        <button role="tab" aria-selected={mode === 'gif'} disabled={busy} onClick={() => switchMode('gif')}><span className="label">GIF 만들기</span><span className="label-short">GIF</span></button>
+        <button role="tab" aria-selected={mode === 'photo'} disabled={gifBusy || makerBusy} onClick={() => switchMode('photo')}><span className="label">사진 편집</span><span className="label-short">사진</span></button>
+        <button role="tab" aria-selected={mode === 'thumb'} disabled={busy || gifBusy || makerBusy} onClick={() => switchMode('thumb')}><span className="label">썸네일 만들기</span><span className="label-short">썸네일</span></button>
+        <button role="tab" aria-label="스티커 만들기" aria-selected={mode === 'maker'} disabled={busy || gifBusy} onClick={() => switchMode('maker')}><span className="label">스티커 만들기</span><span className="label-short">스티커</span></button>
+        <button role="tab" aria-selected={mode === 'gif'} disabled={busy || makerBusy} onClick={() => switchMode('gif')}><span className="label">GIF 만들기</span><span className="label-short">GIF</span></button>
       </div>
       <div className="photo-tools" hidden={mode !== 'thumb'}>
         <nav aria-label="썸네일 사진" className="toolbar-group">
@@ -1089,7 +1092,11 @@ function App() {
       <GifMaker incoming={incomingVideo} outputFolder={outputFolder} active={mode === 'gif'} onBusyChange={setGifBusy}
         onSaved={receipt => setOutputFolder(receipt.folderLabel)} onStatus={showStatus} onError={showError} />
     </div>
-    <section className="workspace" hidden={mode === 'gif'}>
+    <div className="gif-host" hidden={mode !== 'maker'}>
+      <StickerMaker active={mode === 'maker'} outputFolder={outputFolder} onBusyChange={setMakerBusy} onSaved={setOutputFolder}
+        onLibrary={setLibraryItems} onStatus={showStatus} onError={showError} />
+    </div>
+    <section className="workspace" hidden={mode === 'gif' || mode === 'maker'}>
       <div className="canvas-column">
         {mode === 'thumb' ? (photo ? <EditorCanvas key={photo.id} photo={photo} assets={assets.current} scene={scene} disabled={busy} onChange={(id, value) => change(value, id)} selectionTools={editTools}
           onSelect={selectFromCanvas} info={<>썸네일 · {THUMB_SIZE} × {THUMB_SIZE} px · {thumbFormat === 'jpg' ? 'JPG' : 'PNG'} · <b className={dirty ? 'dirty' : ''}>{dirty ? '수정됨' : sessions.current.get(THUMB)?.saved ? '저장됨' : '새 썸네일'}</b></>} />
@@ -1238,7 +1245,8 @@ function App() {
       </div>
     </section>}
     <footer className="statusbar"><p role="status" aria-live="polite">{status || (mode === 'photo' && photo ? <span className="shortcuts">Ctrl+S 저장 · Ctrl+Z 실행 취소 · Ctrl+D 복제 · Delete 삭제 · B 블러·모자이크 · T 글자 · C 자르기 · Ctrl+휠 확대</span>
-  : mode === 'thumb' ? <span className="shortcuts">Ctrl+S 썸네일 저장 · Ctrl+Z 실행 취소 · Ctrl+D 복제 · Delete 삭제 · T 글자</span> : '')}</p>{error && !libraryOpen && !pendingPhoto && <p role="alert">{error}</p>}
+  : mode === 'thumb' ? <span className="shortcuts">Ctrl+S 썸네일 저장 · Ctrl+Z 실행 취소 · Ctrl+D 복제 · Delete 삭제 · T 글자</span>
+  : mode === 'maker' ? <span className="shortcuts">Ctrl+S PNG로 저장 · 문장에서 [ ]로 감싼 글자는 강조됩니다</span> : '')}</p>{error && !libraryOpen && !pendingPhoto && <p role="alert">{error}</p>}
       <div className="update-area" role="group" aria-label="업데이트">
         {update?.status === 'available' && dismissedUpdate !== update.version && <>
           <span className="update-note">새 버전 {update.version}</span>

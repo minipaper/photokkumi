@@ -382,9 +382,11 @@ aside .thumb-panel[aria-label=꾸미기] { flex: none; max-height: 52%; border-b
   .toolbar { gap: 6px; padding: 6px 8px; }
   .toolbar-group { padding-left: 6px; }
   .toolbar button:not(.icon) { padding: 0 9px; }
-  .mode-tabs button { padding: 0 8px; }
+  .toolbar .mode-tabs button { padding: 0 6px; }
   .draw-toggle .label { display: none; }
-  .draw-toggle .label-short, .mode-tabs .label-short { display: inline; }
+  /* Windows' Malgun Gothic is wider than macOS fonts: blur is icon-only and 폴더 열기 shortens so four mode tabs fit at 760px. */
+  .folder-open .label-short, .mode-tabs .label-short { display: inline; }
+  .folder-open .label { display: none; }
   .mode-tabs .label { display: none; }
   .text-toggle .label { display: none; }
   .text-fields .field-row .segmented.three { grid-template-columns: repeat(3, 24px); }

@@ -1043,7 +1043,7 @@ function App() {
       <div className="photo-tools" hidden={mode !== 'photo'}>
       <nav aria-label="파일 작업" className="toolbar-group">
         <button onClick={choosePhoto} disabled={busy || !!pendingPhoto}>사진 열기</button>
-        <button onClick={choosePhotoFolder} disabled={busy || !!pendingPhoto}>폴더 열기</button>
+        <button className="folder-open" aria-label="폴더 열기" onClick={choosePhotoFolder} disabled={busy || !!pendingPhoto}><span className="label">폴더 열기</span><span className="label-short">폴더</span></button>
       </nav>
       <div className="toolbar-group" aria-label="편집 이력">
         <button className="icon" aria-label="실행 취소" title="실행 취소 (Ctrl+Z)" disabled={busy || !history.past.length} onClick={() => { commitCrop(); applyHistory(undoScene(currentHistory.current)) }}><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M5.5 3.5 2.5 6.5l3 3"/><path d="M2.5 6.5h7a4 4 0 0 1 0 8H7"/></svg></button>

@@ -1360,7 +1360,7 @@ test('자르기: C키·비율 프리셋·가로/세로·상자 끌기·Esc 취�
   await expect(size).toHaveAttribute('data-y', '0')
   // Esc drops the edit; the photo is not cut yet.
   await page.keyboard.press('Escape')
-  await expect(page.getByRole('tab', { name: /스티커/ })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('tab', { name: '스티커', exact: true })).toHaveAttribute('aria-selected', 'true')
   await expect(frame).toHaveAttribute('data-frame', '0,0,1200,800')
 
   await tab.click()
@@ -1373,7 +1373,7 @@ test('자르기: C키·비율 프리셋·가로/세로·상자 끌기·Esc 취�
   for (let i = 0; i < 20; i++) await page.keyboard.press('Shift+ArrowRight')
   await expect(size).toHaveAttribute('data-x', '200')
   await page.keyboard.press('Enter')
-  await expect(page.getByRole('tab', { name: /스티커/ })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('tab', { name: '스티커', exact: true })).toHaveAttribute('aria-selected', 'true')
   await expect(frame).toHaveAttribute('data-frame', '200,0,600,800')
   await expect(page.getByText(/자르기 600 × 800/)).toBeVisible()
   await expect(tab).toContainText('자르기')

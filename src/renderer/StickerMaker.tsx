@@ -198,7 +198,7 @@ export function StickerMaker({ active, outputFolder, onSaved, onLibrary, onStatu
         <span className="hint">미리보기 바탕</span>
         {([['white', '흰색'], ['checker', '투명'], ['dark', '어두운 색']] as const).map(([value, label]) =>
           <button key={value} aria-pressed={backdrop === value} onClick={() => setBackdrop(value)}>{label}</button>)}
-        <span className="canvas-info" data-testid="maker-size">{size ? `${size.width} × ${size.height} px · 투명 PNG · 실제 크기` : ''}</span>
+        <span className="maker-size" data-testid="maker-size">{size ? `${size.width} × ${size.height} px · 투명 PNG · 실제 크기` : ''}</span>
       </div>
     </div>
     <aside className="maker-side">

@@ -142,7 +142,7 @@ kbd { display: inline-block; min-width: 18px; padding: 0 4px; margin: 0 1px; bor
 .selection-bar button.danger { color: var(--danger); }
 .selection-bar button.danger:hover:not(:disabled) { background: #fdecea; }
 .view-tools .zoom { min-width: 44px; text-align: center; font-variant-numeric: tabular-nums; color: var(--muted); }
-.canvas-info { flex: 1; min-width: 0; text-align: right; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.canvas-info, .maker-size { flex: 1; min-width: 0; text-align: right; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .canvas-info b { font-weight: 500; color: var(--ok); }
 .canvas-info b.dirty { color: #b54708; }
 .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; background: var(--canvas); color: var(--muted); }

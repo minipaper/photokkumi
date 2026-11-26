@@ -22,6 +22,8 @@ export interface Scene {
   crop?: Crop
   /** Quarter turns clockwise of the photo (see turn.ts); undefined = upright. Photo editor only. */
   turn?: Turn
+  /** Tilt of the photo alone in degrees clockwise (see straighten.ts); undefined = level. Photo editor only. */
+  straighten?: number
 }
 export interface SceneHistory { present: Scene; past: Scene[]; future: Scene[] }
 export const emptyHistory = (): SceneHistory => ({ present: { stickers: [], regions: [], shapes: [], texts: [], adjust: { ...NEUTRAL_ADJUSTMENTS }, selectedId: null }, past: [], future: [] })

@@ -166,7 +166,7 @@ aside {
 .adjust-row.temperature input[type=range] { accent-color: #e8833a; }
 .crop-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 12px; overflow: auto; }
 .crop-presets { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
-.crop-presets button { height: auto; min-height: 48px; padding: 5px 1px; display: grid; gap: 2px; place-content: center; text-align: center; }
+.crop-presets button { height: auto; min-height: 40px; padding: 5px 1px; display: grid; gap: 2px; place-content: center; text-align: center; }
 .crop-presets button b { font-size: 13px; font-variant-numeric: tabular-nums; }
 .crop-presets button small { color: var(--muted); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .crop-presets button[aria-checked=true] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
@@ -175,6 +175,16 @@ aside {
 .crop-panel .field-row .segmented { flex: 0 1 170px; }
 .crop-turn { flex: 0 1 170px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .crop-turn button { height: 30px; padding: 0 6px; font-size: 12px; }
+.straighten-row { display: grid; grid-template-columns: auto 1fr 56px; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+.straighten-row input[type=number] { width: 56px; height: 28px; text-align: right; }
+/* A ruler like phone galleries: a tick every 5° (18 steps over ±45°), a longer one at 0°, and the angle as an accent bar. */
+.straighten-row .ruler { -webkit-appearance: none; appearance: none; width: 100%; min-width: 0; height: 24px; margin: 0; padding: 0 3px; border: 0; cursor: ew-resize;
+  background: linear-gradient(var(--muted), var(--muted)) center / 1px 14px no-repeat,
+    repeating-linear-gradient(to right, var(--line-strong) 0 1px, transparent 1px calc((100% - 7px) / 18)) 3px center / calc(100% - 6px) 8px no-repeat; }
+.straighten-row .ruler::-webkit-slider-runnable-track { height: 24px; background: transparent; }
+.straighten-row .ruler::-webkit-slider-thumb { -webkit-appearance: none; width: 4px; height: 22px; margin-top: 1px; border-radius: 2px; background: var(--accent); }
+.straighten-row .ruler:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.straighten-row .ruler:disabled { cursor: default; opacity: .5; }
 .crop-size { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
 .crop-size strong { color: var(--text); font-variant-numeric: tabular-nums; }
 .crop-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }

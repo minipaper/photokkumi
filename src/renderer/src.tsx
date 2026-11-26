@@ -28,7 +28,8 @@ import { composePng } from './export'
 import { ADJUSTMENT_KEYS, isNeutral, sameAdjustments, NEUTRAL_ADJUSTMENTS, type Adjustments } from '../shared/filters'
 import { CROP_LABELS, CROP_PRESETS, aspectRatio, centeredCrop, cropArea, fullCrop, hasOrientation, isPortraitAspect, moveCrop, normalizeCrop, orient, sameCrop, type Crop, type CropAspect, type CropRect } from '../shared/crop'
 import { turnScene, turnedSize, type Turn } from '../shared/turn'
-import { renderTurned } from './turn-photo'
+import { renderOriented } from './turn-photo'
+import { MAX_STRAIGHTEN, normalizeStraighten } from '../shared/straighten'
 import './style.css'
 const validTextDefaults = (value: unknown): value is { style: TextStyle; relSize: number } => {
   const v = value as Record<string, unknown> | null
@@ -70,7 +71,13 @@ function App() {
     return () => { alive = false; off() }
   }, [])
   // HEIC photos take about a second each to convert, so a batch reports how far it got.
-  useEffect(() => window.photokkumi.onPhotoProgress((done, total) => setStatus(`사진 불러오는 중… ${done}/${total}`)), [])
+  // Progress arrives on its own IPC channel and can land after the import's result; only show it while an import is waiting.
+  const importingPhotos = useRef(0)
+  useEffect(() => window.photokkumi.onPhotoProgress((done, total) => { if (importingPhotos.current) setStatus(`사진 불러오는 중… ${done}/${total}`) }), [])
+  async function importPhotos<T>(call: () => Promise<T>): Promise<T> {
+    importingPhotos.current++
+    try { return await call() } finally { importingPhotos.current-- }
+  }
   const [dragging, setDragging] = useState<false | 'photos' | 'stickers'>(false)
   // Numeric position fields stay folded until wanted; the choice is a per-viewer convenience.
   const [fieldsOpen, setFieldsOpen] = useState(() => { try { return localStorage.getItem('pk.placementFields') === 'open' } catch { return false } })
@@ -91,19 +98,19 @@ function App() {
   const currentHistory = useRef(history)
   const assets = useRef(new Map<string, DecodedAsset>())
   const scene = history.present
-  /** Turned copy of the current photo; rebuilt only when the photo or its turn changes. */
-  const turnCache = useRef<{ raw: DecodedAsset; turn: Turn; photo: DecodedAsset } | null>(null)
-  function turnedPhoto(raw: DecodedAsset | null, turn: Turn | undefined): DecodedAsset | null {
-    if (!raw || !turn) return raw
+  /** Turned/straightened copy of the current photo; rebuilt only when the photo, its turn or its tilt changes. */
+  const turnCache = useRef<{ raw: DecodedAsset; turn?: Turn; straighten?: number; photo: DecodedAsset } | null>(null)
+  function turnedPhoto(raw: DecodedAsset | null, turn: Turn | undefined, straighten: number | undefined): DecodedAsset | null {
+    if (!raw || (!turn && !straighten)) return raw
     const cached = turnCache.current
-    if (cached?.raw === raw && cached.turn === turn) return cached.photo
-    const photo = { ...raw, ...turnedSize(raw, turn), bitmap: renderTurned(raw.bitmap, turn) }
+    if (cached?.raw === raw && cached.turn === turn && cached.straighten === straighten) return cached.photo
+    const photo = { ...raw, ...turnedSize(raw, turn), bitmap: renderOriented(raw.bitmap, turn, straighten) }
     // The canvas may still show the previous copy until this render commits.
     if (cached) setTimeout(() => cached.photo.bitmap.close(), 1000)
-    turnCache.current = { raw, turn, photo }
+    turnCache.current = { raw, turn, straighten, photo }
     return photo
   }
-  const photo = turnedPhoto(rawPhoto, scene.turn)
+  const photo = turnedPhoto(rawPhoto, scene.turn, scene.straighten)
   const placement = scene.stickers.find(item => item.id === scene.selectedId) ?? null
   const region = scene.regions.find(item => item.id === scene.selectedId) ?? null
   const textItem = scene.texts.find(item => item.id === scene.selectedId) ?? null
@@ -272,13 +279,17 @@ function App() {
     else sessions.current.set(pending.photoId, editPhotoSession(session, commitScene(session.history, { ...present, crop })))
   }
   function commitCrop() { if (cropDraftRef.current) commitCropDraft(cropDraftRef.current) }
+  /** The scene crop the draft was last synced with: a tilt rebuilds the photo but keeps this object, so the draft stays. */
+  const cropBase = useRef<Crop | undefined>(undefined)
   useEffect(() => {
     const pending = cropDraftRef.current
     // Leaving the tool some other way (a toolbar button, another mode or photo) still keeps the crop.
     if (pending && (!cropMode || pending.photoId !== photo?.id)) commitCropDraft(pending)
     if (!cropMode || !photo) { setCropDraft(null); return }
     // Undo/redo or a commit changed the crop: show the photo's crop (an unchanged draft keeps its preset).
-    if (pending?.photoId === photo.id && pending.width === photo.width && pending.height === photo.height && sameCrop(normalizeCrop(pending.crop, pending), scene.crop)) return
+    if (pending?.photoId === photo.id && pending.width === photo.width && pending.height === photo.height
+      && (scene.crop === cropBase.current || sameCrop(normalizeCrop(pending.crop, pending), scene.crop))) { cropBase.current = scene.crop; return }
+    cropBase.current = scene.crop
     const crop = scene.crop ?? fullCrop(photo)
     setCropDraft({ photoId: photo.id, width: photo.width, height: photo.height, crop })
     setCropPortrait(hasOrientation(crop.aspect) ? isPortraitAspect(crop.aspect) : photo.height > photo.width)
@@ -299,6 +310,22 @@ function App() {
   }
   function resetCrop() { const draft = cropDraftRef.current; if (draft) setCropDraft({ ...draft, crop: fullCrop(draft) }) }
   function finishCrop() { commitCrop(); openTab('stickers') }
+  /** Tilts the photo alone (0.1° steps within ±45°); a live slider drag becomes one undo step when it ends. */
+  function changeStraighten(value: number, live = false) {
+    if (!rawPhoto || rawPhoto.id === THUMB || !Number.isFinite(value)) return
+    const current = currentHistory.current.present, straighten = normalizeStraighten(value)
+    if (current.straighten === straighten) return
+    const next: Scene = { ...current, straighten }
+    if (straighten === undefined) delete next.straighten
+    if (live) liveEdit(next); else { commitLive(); editScene(next) }
+  }
+  function straightenKey(event: KeyboardEvent<HTMLInputElement>) {
+    // Shift+arrow tilts 1° at a time (the slider's own arrows move 0.1°).
+    const sign = ({ ArrowLeft: -1, ArrowDown: -1, ArrowRight: 1, ArrowUp: 1 } as Record<string, number>)[event.key]
+    if (!event.shiftKey || !sign) return
+    event.preventDefault()
+    changeStraighten((currentHistory.current.present.straighten ?? 0) + sign, true)
+  }
   /** Turns the photo a quarter turn with everything on it (one undo step); a crop being edited is kept first. */
   function turnPhoto(clockwise: boolean) {
     if (!rawPhoto || rawPhoto.id === THUMB) return
@@ -607,7 +634,7 @@ function App() {
     setStatus(`${decoded.name} · 편집 중`)
   }
   const choosePhoto = () => run(async () => {
-    const result = await window.photokkumi.choosePhotos()
+    const result = await importPhotos(() => window.photokkumi.choosePhotos())
     if (!result.ok) throw new Error(result.error)
     if (result.value) await acceptBatch(result.value, [])
   })
@@ -619,12 +646,12 @@ function App() {
     setStatus(`사진 ${added}장 추가 · 전체 ${imported.length}장.${rejected.length ? ` 지원하지 않거나 읽을 수 없는 파일 ${rejected.length}개 제외: ${rejected.slice(0, 3).join(', ')}${rejected.length > 3 ? ' 외' : ''}` : ''}`)
   }
   const choosePhotoFolder = () => run(async () => {
-    const result = await window.photokkumi.choosePhotoFolder()
+    const result = await importPhotos(() => window.photokkumi.choosePhotoFolder())
     if (!result.ok) throw new Error(result.error)
     if (result.value) await acceptBatch(result.value.photos, result.value.rejected)
   })
   const importDropped = (files: File[]) => run(async () => {
-    const result = await window.photokkumi.importDroppedFiles(files)
+    const result = await importPhotos(() => window.photokkumi.importDroppedFiles(files))
     if (!result.ok) throw new Error(result.error)
     const { photos: imported, rejected, videos } = result.value
     const before = new Set(photos.map(item => item.id))
@@ -691,7 +718,8 @@ function App() {
     try { return await writeCurrent() } catch (error) { setStatus(''); throw error }
   }
   async function writeCurrent(): Promise<boolean> {
-    const photo = turnedPhoto(livePhoto.current, currentHistory.current.present.turn)
+    commitLive()
+    const photo = turnedPhoto(livePhoto.current, currentHistory.current.present.turn, currentHistory.current.present.straighten)
     if (!photo || photo.id === THUMB) return false
     if (!outputLoaded) throw new Error('출력 설정을 불러온 뒤 저장할 수 있습니다.')
     // Typing, a slider drag or a crop still in progress becomes its undo step now, not after the save marks the photo clean.
@@ -832,7 +860,7 @@ function App() {
   }
   const openThumbPhoto = () => run(async () => {
     const before = new Set(photos.map(item => item.id))
-    const result = await window.photokkumi.choosePhotos()
+    const result = await importPhotos(() => window.photokkumi.choosePhotos())
     if (!result.ok) throw new Error(result.error)
     if (!result.value) return
     await acceptBatch(result.value, [])
@@ -1161,7 +1189,7 @@ function App() {
           <button role="tab" aria-selected={sideTab === 'regions'} onClick={() => openTab('regions')}>가림{!!scene.regions.length && <span className="tab-count">{scene.regions.length}</span>}</button>
           <button role="tab" aria-selected={sideTab === 'text'} onClick={() => openTab('text')}>글자{!!scene.texts.length && <span className="tab-count">{scene.texts.length}</span>}</button>
           <button role="tab" aria-selected={sideTab === 'adjust'} onClick={() => openTab('adjust')}>보정{!isNeutral(scene.adjust) && <span className="tab-dot" aria-label="(적용됨)" />}</button>
-          <button role="tab" aria-selected={sideTab === 'crop'} title="자르기·회전 (C)" onClick={() => openTab('crop')}>자르기{(!!scene.crop || !!scene.turn) && <span className="tab-dot" aria-label="(적용됨)" />}</button>
+          <button role="tab" aria-selected={sideTab === 'crop'} title="자르기·회전 (C)" onClick={() => openTab('crop')}>자르기{(!!scene.crop || !!scene.turn || !!scene.straighten) && <span className="tab-dot" aria-label="(적용됨)" />}</button>
         </div>
         {sideTab === 'regions' ? <section className="region-panel" aria-label="블러·모자이크">
           <div className="region-fields" role="group" aria-label="가림 효과">
@@ -1194,11 +1222,18 @@ function App() {
           {region ? numericFields : <p className="hint">{photo ? '켜 둔 채로 여러 곳을 연속으로 가릴 수 있습니다. 빈 곳을 드래그하면 새 영역, 영역을 누르면 선택됩니다. Shift는 정원·정사각형, 사진 밖에서 드래그를 시작하면 사진 끝에 딱 맞춰집니다. Esc나 B로 도구를 끕니다.' : '사진을 열면 블러·모자이크로 가릴 수 있습니다.'}</p>}
         </section> : sideTab === 'crop' ? (() => {
           const aspect = cropDraft?.crop.aspect, orientable = !!aspect && hasOrientation(aspect)
-          return <section className="crop-panel" aria-label="자르기">
+          return <section className="crop-panel" aria-label="자르기·회전">
             <div className="field-row"><span>회전</span><div className="crop-turn">
               <button disabled={busy || !cropDraft} title="왼쪽으로 90° 돌리기" aria-label="왼쪽으로 90° 회전" onClick={() => turnPhoto(false)}>↺ 왼쪽</button>
               <button disabled={busy || !cropDraft} title="오른쪽으로 90° 돌리기" aria-label="오른쪽으로 90° 회전" onClick={() => turnPhoto(true)}>↻ 오른쪽</button>
             </div></div>
+            <div className="straighten-row"><span>기울기</span>
+              <input type="range" className="ruler" aria-label="기울기 슬라이더" min={-MAX_STRAIGHTEN} max={MAX_STRAIGHTEN} step="0.1" disabled={busy || !cropDraft} value={scene.straighten ?? 0}
+                title="끌어서 수평을 맞춥니다 · 방향키 0.1°, Shift+방향키 1° · 두 번 클릭하면 0°" onDoubleClick={() => changeStraighten(0)} onKeyDown={straightenKey}
+                onChange={e => changeStraighten(e.target.valueAsNumber, true)} onPointerUp={commitLive} onKeyUp={commitLive} onBlur={commitLive} />
+              <input type="number" aria-label="기울기" min={-MAX_STRAIGHTEN} max={MAX_STRAIGHTEN} step="0.1" disabled={busy || !cropDraft} value={scene.straighten ?? 0}
+                onChange={e => changeStraighten(e.target.valueAsNumber)} />
+            </div>
             <div className="crop-presets" role="radiogroup" aria-label="자르기 비율">
               {CROP_PRESETS.map(base => {
                 const label = CROP_LABELS[orient(base, cropPortrait)]
@@ -1218,7 +1253,7 @@ function App() {
               <button disabled={busy || !cropDraft || photos.length < 2 || !aspect || aspect === 'free' || aspect === 'original'}
                 title="다른 사진을 같은 비율로 가운데를 자릅니다 (세로 사진은 세로 비율로)" onClick={applyCropToAll}>모든 사진에 이 비율</button>
             </div>
-            <p className="hint">{photo ? '모서리는 크기, 안쪽은 위치 · 방향키 1px(Shift 10px) · Enter 완료 · Esc 취소' : '사진을 열면 자를 수 있습니다.'}</p>
+            <p className="hint">{photo ? 'Enter 완료 · Esc 취소 · 방향키로 상자 이동' : '사진을 열면 자를 수 있습니다.'}</p>
           </section>
         })() : sideTab === 'text' ? textPanel : sideTab === 'adjust' ? <section className="adjust-panel" aria-label="사진 보정">
           {ADJUSTMENT_KEYS.map(key => {

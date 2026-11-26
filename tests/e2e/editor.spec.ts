@@ -1754,6 +1754,82 @@ test('사진 회전: 자르기 탭에서 90° 돌리면 스티커·자르기가 
   expect(createHash('sha256').update(await readFile(source)).digest('hex')).toBe(original)
 })
 
+test('기울기: 눈금자·숫자·방향키로 0.1° 단위 조절, 빈 귀퉁이 없이 확대해 같은 크기로 저장, 스티커는 그대로, undo, 원본 불변', async () => {
+  // Quadrants: top-left yellow, top-right cyan, bottom-left red, bottom-right blue.
+  const color = (x: number, y: number) => [x < 600 ? 200 : 0, y < 400 ? 200 : 0, x >= 600 ? 200 : 0, 255]
+  await writeFile(source, makePng(1200, 800, color))
+  const original = createHash('sha256').update(await readFile(source)).digest('hex')
+  await select(source); await page.getByRole('button', { name: '사진 열기', exact: true }).click()
+  await register(stickerPath)
+  await page.getByRole('button', { name: '투명 스티커 배치', exact: true }).click()
+  await field('중심 X', 300); await field('중심 Y', 200); await field('스티커 너비', 80)
+  const frame = page.getByTestId('canvas-frame'), tab = page.getByRole('tab', { name: /자르기/ })
+  const angle = page.getByRole('spinbutton', { name: '기울기', exact: true }), ruler = page.getByRole('slider', { name: '기울기 슬라이더' })
+  await tab.click()
+  await expect(angle).toHaveValue('0')
+  // Slider arrows move 0.1°, Shift+arrows 1°.
+  await ruler.focus()
+  for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('Shift+ArrowLeft')
+  await expect(angle).toHaveValue('-0.7')
+  await ruler.dblclick()
+  await expect(angle).toHaveValue('0')
+  await angle.fill('8.25'); await angle.press('Tab')
+  await expect(angle).toHaveValue('8.3')
+  await angle.fill('60'); await angle.press('Tab')
+  await expect(angle).toHaveValue('45')
+  await angle.fill('10'); await angle.press('Tab')
+  await expect(angle).toHaveValue('10')
+  await page.getByRole('button', { name: '완료', exact: true }).click()
+  // The frame and the sticker keep their size and place; only the photo tilts.
+  await expect(frame).toHaveAttribute('data-frame', '0,0,1200,800')
+  await page.getByRole('button', { name: /^배치 1/ }).click()
+  expect(await value('중심 X')).toBe(300); expect(await value('회전')).toBe(0)
+
+  await save()
+  const result = await output()
+  expect([result.width, result.height]).toEqual([1200, 800])
+  // Each saved pixel comes from the photo turned back by 10° about the center and shrunk by the cover scale.
+  const theta = 10 * Math.PI / 180, cos = Math.cos(theta), sin = Math.sin(theta)
+  const scale = Math.max((1200 * cos + 800 * sin) / 1200, (1200 * sin + 800 * cos) / 800)
+  let checked = 0
+  for (let y = 0; y < 800; y += 37) for (let x = 0; x < 1200; x += 53) {
+    if (Math.hypot(x - 300, y - 200) < 60) continue
+    const dx = (x + 0.5 - 600) / scale, dy = (y + 0.5 - 400) / scale
+    const sx = 600 + dx * cos + dy * sin, sy = 400 - dx * sin + dy * cos
+    // Skip pixels near a color edge, where smoothing blends both sides.
+    if (Math.abs(sx - 600) < 4 || Math.abs(sy - 400) < 4) continue
+    expect(sx >= 0 && sx < 1200 && sy >= 0 && sy < 800, `${x},${y} inside the photo`).toBe(true)
+    const actual = pixel(result, x, y), expected = color(sx, sy)
+    expected.forEach((channel, index) => expect(Math.abs(actual[index] - channel), `${x},${y}: ${actual} ≈ ${expected}`).toBeLessThanOrEqual(3))
+    checked++
+  }
+  expect(checked).toBeGreaterThan(300)
+  // No empty corner: all four are opaque photo pixels.
+  for (const [x, y] of [[0, 0], [1199, 0], [0, 799], [1199, 799]]) expect(pixel(result, x, y)[3]).toBe(255)
+  // The sticker is not tilted: red left half, green right half on one row.
+  expect(pixel(result, 280, 195)).toEqual([255, 0, 0, 255])
+  expect(pixel(result, 320, 195)).toEqual([0, 255, 0, 255])
+
+  // Undo goes back through the typed angles to level; redo restores 10°.
+  await page.getByTestId('canvas-area').focus()
+  await page.keyboard.press('ControlOrMeta+z')
+  await tab.click()
+  await expect(angle).toHaveValue('45')
+  await page.getByRole('button', { name: '완료', exact: true }).click()
+  await page.getByTestId('canvas-area').focus()
+  await page.keyboard.press('ControlOrMeta+Shift+z')
+  await tab.click()
+  await expect(angle).toHaveValue('10')
+  await expect(tab.locator('.tab-dot')).toHaveCount(1)
+  // Tilting while a crop box is being edited keeps the box.
+  await page.getByRole('radio', { name: /^1:1/ }).click()
+  await angle.fill('5'); await angle.press('Tab')
+  await expect(page.getByTestId('crop-size')).toHaveText('800 × 800 px')
+  await expect(page.getByRole('radio', { name: /^1:1/ })).toHaveAttribute('aria-checked', 'true')
+  expect(createHash('sha256').update(await readFile(source)).digest('hex')).toBe(original)
+})
+
 function findFfmpeg() {
   const { spawnSync } = process.getBuiltinModule('node:child_process') as typeof import('node:child_process')
   for (const candidate of [process.env.FFMPEG_PATH, 'ffmpeg', '/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg'].filter(Boolean) as string[]) {

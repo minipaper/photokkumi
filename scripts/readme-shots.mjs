@@ -88,12 +88,15 @@ await page.getByRole('button', { name: /^글자 1:/ }).click()
 await page.evaluate('document.activeElement?.blur()')
 await page.mouse.move(W / 2, H - 60); await page.waitForTimeout(500)
 await shot('text.png')
-// Crop tool on the same photo with a 1:1 box; Esc leaves the photo uncut for the thumbnail shot.
+// Crop tool on the same photo with a 1:1 box and a slight tilt; Esc and undo leave the photo as it was for the thumbnail shot.
 await page.getByRole('tab', { name: /^자르기/ }).click()
 await page.getByRole('radio', { name: /^1:1/ }).click()
+const tilt = page.getByRole('spinbutton', { name: '기울기', exact: true }); await tilt.fill('-3.5'); await tilt.press('Tab')
+await page.evaluate('document.activeElement?.blur()')
 await page.mouse.move(W / 2, H - 60); await page.waitForTimeout(500)
 await shot('crop.png')
 await page.keyboard.press('Escape')
+await page.getByTestId('canvas-area').focus(); await page.keyboard.press('ControlOrMeta+z')
 await page.getByRole('tab', { name: '스티커', exact: true }).click()
 await page.keyboard.press('Escape')
 // Thumbnail: the open photo as background, a template, a new title.

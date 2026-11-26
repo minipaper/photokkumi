@@ -27,6 +27,8 @@ import { DEFAULT_OUTPUT, validOutput, outputSize, outputKey, type OutputSettings
 import { composePng } from './export'
 import { ADJUSTMENT_KEYS, isNeutral, sameAdjustments, NEUTRAL_ADJUSTMENTS, type Adjustments } from '../shared/filters'
 import { CROP_LABELS, CROP_PRESETS, aspectRatio, centeredCrop, cropArea, fullCrop, hasOrientation, isPortraitAspect, moveCrop, normalizeCrop, orient, sameCrop, type Crop, type CropAspect, type CropRect } from '../shared/crop'
+import { turnScene, turnedSize, type Turn } from '../shared/turn'
+import { renderTurned } from './turn-photo'
 import './style.css'
 const validTextDefaults = (value: unknown): value is { style: TextStyle; relSize: number } => {
   const v = value as Record<string, unknown> | null
@@ -80,7 +82,8 @@ function App() {
   const activeId = useRef<string | null>(null)
   const [pendingPhoto, setPendingPhoto] = useState<string | null>(null)
   const switchDialog = useRef<HTMLDialogElement>(null)
-  const [photo, setPhotoState] = useState<DecodedAsset | null>(null)
+  /** The decoded photo as opened (EXIF applied); `photo` below is it turned by the scene's quarter turns. */
+  const [rawPhoto, setPhotoState] = useState<DecodedAsset | null>(null)
   // The shown photo also in a ref: a save right after switching back from the thumbnail must not see the old render's value.
   const livePhoto = useRef<DecodedAsset | null>(null)
   const setPhoto = (next: DecodedAsset | null) => { livePhoto.current = next; setPhotoState(next) }
@@ -88,6 +91,19 @@ function App() {
   const currentHistory = useRef(history)
   const assets = useRef(new Map<string, DecodedAsset>())
   const scene = history.present
+  /** Turned copy of the current photo; rebuilt only when the photo or its turn changes. */
+  const turnCache = useRef<{ raw: DecodedAsset; turn: Turn; photo: DecodedAsset } | null>(null)
+  function turnedPhoto(raw: DecodedAsset | null, turn: Turn | undefined): DecodedAsset | null {
+    if (!raw || !turn) return raw
+    const cached = turnCache.current
+    if (cached?.raw === raw && cached.turn === turn) return cached.photo
+    const photo = { ...raw, ...turnedSize(raw, turn), bitmap: renderTurned(raw.bitmap, turn) }
+    // The canvas may still show the previous copy until this render commits.
+    if (cached) setTimeout(() => cached.photo.bitmap.close(), 1000)
+    turnCache.current = { raw, turn, photo }
+    return photo
+  }
+  const photo = turnedPhoto(rawPhoto, scene.turn)
   const placement = scene.stickers.find(item => item.id === scene.selectedId) ?? null
   const region = scene.regions.find(item => item.id === scene.selectedId) ?? null
   const textItem = scene.texts.find(item => item.id === scene.selectedId) ?? null
@@ -174,7 +190,11 @@ function App() {
   }, [settingsOpen])
   useEffect(() => { if (libraryOpen && !libraryDialog.current?.open) libraryDialog.current?.showModal() }, [libraryOpen])
   const closeLibrary = () => { if (!operation.current) { libraryDialog.current?.close(); setLibraryOpen(false) } }
-  useEffect(() => () => photo?.bitmap.close(), [photo])
+  useEffect(() => () => {
+    rawPhoto?.bitmap.close()
+    const cached = turnCache.current
+    if (cached && cached.raw === rawPhoto) { turnCache.current = null; setTimeout(() => cached.photo.bitmap.close(), 1000) }
+  }, [rawPhoto])
   useEffect(() => () => thumbSource.current?.bitmap.close(), [])
   useEffect(() => {
     const keep = new Set([...sessions.current.values()].flatMap(sessionAssets))
@@ -258,7 +278,7 @@ function App() {
     if (pending && (!cropMode || pending.photoId !== photo?.id)) commitCropDraft(pending)
     if (!cropMode || !photo) { setCropDraft(null); return }
     // Undo/redo or a commit changed the crop: show the photo's crop (an unchanged draft keeps its preset).
-    if (pending?.photoId === photo.id && sameCrop(normalizeCrop(pending.crop, pending), scene.crop)) return
+    if (pending?.photoId === photo.id && pending.width === photo.width && pending.height === photo.height && sameCrop(normalizeCrop(pending.crop, pending), scene.crop)) return
     const crop = scene.crop ?? fullCrop(photo)
     setCropDraft({ photoId: photo.id, width: photo.width, height: photo.height, crop })
     setCropPortrait(hasOrientation(crop.aspect) ? isPortraitAspect(crop.aspect) : photo.height > photo.width)
@@ -279,6 +299,14 @@ function App() {
   }
   function resetCrop() { const draft = cropDraftRef.current; if (draft) setCropDraft({ ...draft, crop: fullCrop(draft) }) }
   function finishCrop() { commitCrop(); openTab('stickers') }
+  /** Turns the photo a quarter turn with everything on it (one undo step); a crop being edited is kept first. */
+  function turnPhoto(clockwise: boolean) {
+    if (!rawPhoto || rawPhoto.id === THUMB) return
+    commitLive(); commitCrop()
+    const present = currentHistory.current.present
+    editScene(turnScene(present, turnedSize(rawPhoto, present.turn), clockwise))
+    setStatus(`사진을 ${clockwise ? '오른쪽' : '왼쪽'}으로 90° 돌렸습니다.`)
+  }
   function cancelCrop() { cropDraftRef.current = null; setCropDraftState(null); openTab('stickers') }
   function applyCropToAll() {
     commitCrop()
@@ -289,9 +317,9 @@ function App() {
       const session = sessions.current.get(item.id)
       if (!session || item.id === activeId.current) continue
       // Same ratio, each photo in its own orientation (like the 가로/세로 사진 sizes in 저장 설정); a photo already cut to it keeps its own position.
-      const own = orient(aspect, item.height > item.width), present = session.history.present
+      const present = session.history.present, frame = turnedSize(item, present.turn), own = orient(aspect, frame.height > frame.width)
       if (present.crop?.aspect === own) continue
-      const crop = normalizeCrop(centeredCrop(item, own), item)
+      const crop = normalizeCrop(centeredCrop(frame, own), frame)
       if (sameCrop(present.crop, crop)) continue
       sessions.current.set(item.id, editPhotoSession(session, commitScene(session.history, { ...present, crop })))
       count++
@@ -663,7 +691,7 @@ function App() {
     try { return await writeCurrent() } catch (error) { setStatus(''); throw error }
   }
   async function writeCurrent(): Promise<boolean> {
-    const photo = livePhoto.current
+    const photo = turnedPhoto(livePhoto.current, currentHistory.current.present.turn)
     if (!photo || photo.id === THUMB) return false
     if (!outputLoaded) throw new Error('출력 설정을 불러온 뒤 저장할 수 있습니다.')
     // Typing, a slider drag or a crop still in progress becomes its undo step now, not after the save marks the photo clean.
@@ -675,7 +703,7 @@ function App() {
     if (!persisted.ok) throw new Error(persisted.error)
     const present = currentHistory.current.present
     const png = await composePng(photo.bitmap, present.stickers, assets.current, output, present.regions, present.adjust, present.texts, [], present.crop)
-    const result = await window.photokkumi.saveImage({ photoId: photo.id, png, output, ...(present.crop ? { crop: cropArea(present.crop, photo) } : {}) })
+    const result = await window.photokkumi.saveImage({ photoId: photo.id, png, output, ...(present.crop ? { crop: cropArea(present.crop, photo) } : {}), ...(present.turn ? { turn: present.turn } : {}) })
     if (!result.ok) throw new Error(result.error)
     if (!result.value) { setStatus('저장이 취소되었습니다. 편집 내용은 유지됩니다.'); return false }
     sessions.current.set(photo.id, savePhotoSession(sessions.current.get(photo.id)!, outputKey(output), result.value.folderLabel))
@@ -1133,7 +1161,7 @@ function App() {
           <button role="tab" aria-selected={sideTab === 'regions'} onClick={() => openTab('regions')}>가림{!!scene.regions.length && <span className="tab-count">{scene.regions.length}</span>}</button>
           <button role="tab" aria-selected={sideTab === 'text'} onClick={() => openTab('text')}>글자{!!scene.texts.length && <span className="tab-count">{scene.texts.length}</span>}</button>
           <button role="tab" aria-selected={sideTab === 'adjust'} onClick={() => openTab('adjust')}>보정{!isNeutral(scene.adjust) && <span className="tab-dot" aria-label="(적용됨)" />}</button>
-          <button role="tab" aria-selected={sideTab === 'crop'} title="자르기 (C)" onClick={() => openTab('crop')}>자르기{!!scene.crop && <span className="tab-dot" aria-label="(적용됨)" />}</button>
+          <button role="tab" aria-selected={sideTab === 'crop'} title="자르기·회전 (C)" onClick={() => openTab('crop')}>자르기{(!!scene.crop || !!scene.turn) && <span className="tab-dot" aria-label="(적용됨)" />}</button>
         </div>
         {sideTab === 'regions' ? <section className="region-panel" aria-label="블러·모자이크">
           <div className="region-fields" role="group" aria-label="가림 효과">
@@ -1167,6 +1195,10 @@ function App() {
         </section> : sideTab === 'crop' ? (() => {
           const aspect = cropDraft?.crop.aspect, orientable = !!aspect && hasOrientation(aspect)
           return <section className="crop-panel" aria-label="자르기">
+            <div className="field-row"><span>회전</span><div className="crop-turn">
+              <button disabled={busy || !cropDraft} title="왼쪽으로 90° 돌리기" aria-label="왼쪽으로 90° 회전" onClick={() => turnPhoto(false)}>↺ 왼쪽</button>
+              <button disabled={busy || !cropDraft} title="오른쪽으로 90° 돌리기" aria-label="오른쪽으로 90° 회전" onClick={() => turnPhoto(true)}>↻ 오른쪽</button>
+            </div></div>
             <div className="crop-presets" role="radiogroup" aria-label="자르기 비율">
               {CROP_PRESETS.map(base => {
                 const label = CROP_LABELS[orient(base, cropPortrait)]
@@ -1182,11 +1214,11 @@ function App() {
             <div className="crop-actions">
               <button className="primary" disabled={busy || !cropDraft} title="Enter" onClick={finishCrop}>완료</button>
               <button disabled={busy || !cropDraft} title="Esc — 이 탭을 열기 전 범위로" onClick={cancelCrop}>취소</button>
-              <button disabled={busy || !cropDraft || (cropDraft.crop.width === cropDraft.width && cropDraft.crop.height === cropDraft.height)} title="자르지 않은 원본 전체로" onClick={resetCrop}>원래대로</button>
+              <button disabled={busy || !cropDraft || (cropDraft.crop.width === cropDraft.width && cropDraft.crop.height === cropDraft.height)} title="자르지 않은 원본 전체로 (잘린 부분은 원본에 남아 언제든 다시 넓힐 수 있습니다)" onClick={resetCrop}>원래대로</button>
               <button disabled={busy || !cropDraft || photos.length < 2 || !aspect || aspect === 'free' || aspect === 'original'}
                 title="다른 사진을 같은 비율로 가운데를 자릅니다 (세로 사진은 세로 비율로)" onClick={applyCropToAll}>모든 사진에 이 비율</button>
             </div>
-            <p className="hint">{photo ? '모서리를 끌면 크기, 안쪽을 끌면 위치가 바뀝니다. 방향키 1px, Shift+방향키 10px 이동 · Enter 완료 · Esc 취소. 잘린 부분은 원본에 남아 있어 언제든 다시 넓힐 수 있습니다.' : '사진을 열면 자를 수 있습니다.'}</p>
+            <p className="hint">{photo ? '모서리는 크기, 안쪽은 위치 · 방향키 1px(Shift 10px) · Enter 완료 · Esc 취소' : '사진을 열면 자를 수 있습니다.'}</p>
           </section>
         })() : sideTab === 'text' ? textPanel : sideTab === 'adjust' ? <section className="adjust-panel" aria-label="사진 보정">
           {ADJUSTMENT_KEYS.map(key => {
@@ -1235,7 +1267,8 @@ function App() {
           const state = photoState(session)
           return <div key={item.id} className="photo-cell">
             <button className="photo-item" data-state={state} disabled={busy} aria-label={`사진 ${index + 1}: ${item.name}`} aria-pressed={photo?.id === item.id} onClick={() => requestPhoto(item.id)} title={`${item.name} · ${state}`}>
-              <img src={item.thumbnail} alt="" width="80" height="60" loading="lazy" />
+              <img src={item.thumbnail} alt="" width="80" height="60" loading="lazy" data-turn={session.history.present.turn}
+                style={session.history.present.turn ? { transform: `rotate(${session.history.present.turn * 90}deg)` } : undefined} />
               <span>{index + 1}. {item.name}</span>
               <small>{state}</small>
             </button>

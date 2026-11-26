@@ -164,7 +164,7 @@ aside {
 .adjust-head input { width: 60px; text-align: right; }
 .adjust-row input[type=range] { width: 100%; height: auto; padding: 0; border: 0; background: none; accent-color: var(--accent); }
 .adjust-row.temperature input[type=range] { accent-color: #e8833a; }
-.crop-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 12px; overflow: auto; }
+.crop-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 12px; overflow: auto; }
 .crop-presets { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 .crop-presets button { height: auto; min-height: 48px; padding: 5px 1px; display: grid; gap: 2px; place-content: center; text-align: center; }
 .crop-presets button b { font-size: 13px; font-variant-numeric: tabular-nums; }
@@ -173,6 +173,8 @@ aside {
 .crop-presets button[aria-checked=true] small { color: var(--accent); }
 .crop-panel .field-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 12px; }
 .crop-panel .field-row .segmented { flex: 0 1 170px; }
+.crop-turn { flex: 0 1 170px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.crop-turn button { height: 30px; padding: 0 6px; font-size: 12px; }
 .crop-size { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
 .crop-size strong { color: var(--text); font-variant-numeric: tabular-nums; }
 .crop-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
@@ -282,6 +284,8 @@ input.color { flex: none; width: 30px; height: 26px; padding: 2px; border: 1px s
   padding: 4px; border-radius: 6px;
 }
 .photo-item img { width: 100%; height: 40px; object-fit: contain; }
+/* A quarter-turned photo is fitted into a square so it stays inside the thumbnail after rotating. */
+.photo-item img[data-turn='1'], .photo-item img[data-turn='3'] { width: 40px; margin: 0 auto; }
 .photo-item span { display: block; width: 100%; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .photo-item small { font-size: 10px; color: var(--muted); }
 .photo-item[data-state='저장 완료'] small { color: var(--ok); }

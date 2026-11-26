@@ -1689,6 +1689,71 @@ test('썸네일 배경: 사진을 더 열면 배경만 바뀌고, 빈 곳 Delete
   expect(errors).toEqual([])
 })
 
+test('사진 회전: 자르기 탭에서 90° 돌리면 스티커·자르기가 함께 돌고, 돌린 크기·방향으로 저장, undo/redo, 원본 불변', async () => {
+  // Quadrants: top-left yellow, top-right cyan, bottom-left red, bottom-right blue.
+  await writeFile(source, makePng(1200, 800, (x, y) => [x < 600 ? 200 : 0, y < 400 ? 200 : 0, x >= 600 ? 200 : 0, 255]))
+  const original = createHash('sha256').update(await readFile(source)).digest('hex')
+  await select(source); await page.getByRole('button', { name: '사진 열기', exact: true }).click()
+  await register(stickerPath)
+  await page.getByRole('button', { name: '투명 스티커 배치', exact: true }).click()
+  await field('중심 X', 300); await field('중심 Y', 200); await field('스티커 너비', 80)
+  const frame = page.getByTestId('canvas-frame'), size = page.getByTestId('crop-size'), tab = page.getByRole('tab', { name: /자르기/ })
+  await tab.click()
+  await page.getByRole('radio', { name: /^4:3/ }).click()
+  await expect(size).toHaveText('1067 × 800 px')
+  await page.getByRole('button', { name: '오른쪽으로 90° 회전', exact: true }).click()
+  // The 4:3 box turns with the photo into 3:4.
+  await expect(size).toHaveText('800 × 1067 px')
+  await expect(page.getByRole('radio', { name: /^3:4/ })).toHaveAttribute('aria-checked', 'true')
+  await expect(page.getByRole('button', { name: /^사진 1:/ }).locator('img')).toHaveAttribute('data-turn', '1')
+  // Turn buttons fit the smallest window without making the crop panel scroll.
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(760, 580))
+  await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(760)
+  expect(await page.locator('.crop-panel').evaluate(panel => panel.scrollHeight - panel.clientHeight)).toBeLessThanOrEqual(0)
+  await page.getByRole('button', { name: '원래대로', exact: true }).click()
+  await expect(size).toHaveText('800 × 1200 px')
+  await page.getByRole('button', { name: '완료', exact: true }).click()
+  await expect(frame).toHaveAttribute('data-frame', '0,0,800,1200')
+  // The sticker moved with the photo: (x, y) → (H − y, x), turned 90°.
+  await page.getByRole('button', { name: /^배치 1/ }).click()
+  expect(await value('중심 X')).toBe(600); expect(await value('중심 Y')).toBe(300); expect(await value('회전')).toBe(90)
+
+  await save()
+  const result = await output()
+  expect([result.width, result.height]).toEqual([800, 1200])
+  expect(pixel(result, 0, 0)).toEqual([200, 0, 0, 255])
+  expect(pixel(result, 799, 0)).toEqual([200, 200, 0, 255])
+  expect(pixel(result, 799, 1199)).toEqual([0, 200, 200, 255])
+  expect(pixel(result, 0, 1199)).toEqual([0, 0, 200, 255])
+  // The sticker's red half now points up, the green half down.
+  expect(pixel(result, 600, 280)).toEqual([255, 0, 0, 255])
+  expect(pixel(result, 600, 320)).toEqual([0, 255, 0, 255])
+
+  // Undo: 원래대로 → the turn (one step) → the 4:3 crop, then redo all three.
+  await page.getByTestId('canvas-area').focus()
+  await page.keyboard.press('ControlOrMeta+z')
+  await expect(frame).toHaveAttribute('data-frame', '0,66,800,1067')
+  await page.keyboard.press('ControlOrMeta+z')
+  await expect(frame).toHaveAttribute('data-frame', '66,0,1067,800')
+  await page.keyboard.press('ControlOrMeta+z')
+  await expect(frame).toHaveAttribute('data-frame', '0,0,1200,800')
+  await expect(page.getByRole('button', { name: /^사진 1:/ }).locator('img')).not.toHaveAttribute('data-turn', /./)
+  for (let i = 0; i < 3; i++) await page.keyboard.press('ControlOrMeta+Shift+z')
+  await expect(frame).toHaveAttribute('data-frame', '0,0,800,1200')
+
+  // Left turn brings it back upright; the saved photo is the original size again.
+  await tab.click()
+  await page.getByRole('button', { name: '왼쪽으로 90° 회전', exact: true }).click()
+  await expect(size).toHaveText('1200 × 800 px')
+  await page.getByRole('button', { name: '완료', exact: true }).click()
+  await save()
+  const upright = await output('한글 사진_kkumi_1.png')
+  expect([upright.width, upright.height]).toEqual([1200, 800])
+  expect(pixel(upright, 0, 0)).toEqual([200, 200, 0, 255])
+  expect(pixel(upright, 280, 200)).toEqual([255, 0, 0, 255])
+  expect(createHash('sha256').update(await readFile(source)).digest('hex')).toBe(original)
+})
+
 function findFfmpeg() {
   const { spawnSync } = process.getBuiltinModule('node:child_process') as typeof import('node:child_process')
   for (const candidate of [process.env.FFMPEG_PATH, 'ffmpeg', '/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg'].filter(Boolean) as string[]) {

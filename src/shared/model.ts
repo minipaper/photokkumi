@@ -4,6 +4,7 @@ import type { LibrarySticker, StickerMetadata, LibraryImportResult } from './lib
 import type { UpdateState } from './update'
 import type { ThumbSaveRequest } from './shapes'
 import type { CropRect } from './crop'
+import type { Turn } from './turn'
 import type { MakerRequest, MakerSaveReceipt } from './sticker-maker'
 export type AssetKind = 'photo' | 'sticker'
 export interface ImageAsset {
@@ -32,8 +33,8 @@ export type Result<T> = { ok: true; value: T } | { ok: false; error: string }
 export interface PhotoBatch { photos: PhotoInfo[]; rejected: string[] }
 export interface DropBatch extends PhotoBatch { videos: VideoRef[] }
 export interface SaveReceipt { name: string; folderLabel: string }
-/** `crop` (original pixels) is the saved part of the photo; without it the whole photo is saved. */
-export interface SaveRequest { photoId: string; png: Uint8Array; output: OutputSettings; crop?: CropRect }
+/** `turn` is the photo's quarter turns clockwise; `crop` (turned photo pixels) is the saved part, without it the whole photo is saved. */
+export interface SaveRequest { photoId: string; png: Uint8Array; output: OutputSettings; crop?: CropRect; turn?: Turn }
 export interface CloseResolution { requestId: string; action: 'close' | 'cancel' }
 export interface PhotoApi {
   onCloseRequested(callback: (requestId: string) => void): () => void

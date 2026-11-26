@@ -1,5 +1,6 @@
 import { validOutput } from '../shared/output'
 import type { SaveRequest } from '../shared/model'
+import { validTurn } from '../shared/turn'
 const validCropShape = (value: unknown) => !!value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 4
   && ['x', 'y', 'width', 'height'].every(key => Number.isInteger((value as Record<string, unknown>)[key]))
 export function trustedSender(senderId: number, expectedId: number, isMainFrame: boolean, url: string, allowedUrl: string) {
@@ -21,7 +22,11 @@ export function validSaveRequest(value: unknown): value is SaveRequest {
   if (!value || typeof value !== 'object') return false
   const request = value as Record<string, unknown>
   const keys = Object.keys(request)
-  // crop is checked against the photo's size in the save handler; here only its shape.
-  return (keys.length === 3 || (keys.length === 4 && 'crop' in request && validCropShape(request.crop))) && typeof request.photoId === 'string'
+  // crop is checked against the photo's size in the save handler; here only its shape. turn is 1–3 quarter turns when present.
+  const optional = keys.filter(key => key !== 'photoId' && key !== 'png' && key !== 'output')
+  if (keys.length !== 3 + optional.length || !optional.every(key => key === 'crop' || key === 'turn')) return false
+  if ('crop' in request && !validCropShape(request.crop)) return false
+  if ('turn' in request && (request.turn === undefined || !validTurn(request.turn))) return false
+  return keys.includes('photoId') && keys.includes('png') && keys.includes('output') && typeof request.photoId === 'string'
     && request.photoId.length === 36 && request.png instanceof Uint8Array && validOutput(request.output)
 }

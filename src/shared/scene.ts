@@ -3,6 +3,7 @@ import { validPlacement } from './model'
 import { NEUTRAL_ADJUSTMENTS, validAdjustments, type Adjustments } from './filters'
 import { MAX_TEXTS, scaleText, validTextItem, type TextItem } from './text'
 import type { Crop } from './crop'
+import type { Turn } from './turn'
 import { MAX_SHAPES, SHAPE_STYLE_KEYS, validBackground, validShapeItem, type Palette, type ShapeItem, type ShapeStyle, type ThumbBackground } from './shapes'
 export const MAX_INSTANCES = 200
 export const MAX_DECODED_STICKER_PIXELS = 32_000_000
@@ -19,6 +20,8 @@ export interface Scene {
   theme?: string
   /** Saved part of the photo (original pixels); undefined = the whole photo. Photo editor only. */
   crop?: Crop
+  /** Quarter turns clockwise of the photo (see turn.ts); undefined = upright. Photo editor only. */
+  turn?: Turn
 }
 export interface SceneHistory { present: Scene; past: Scene[]; future: Scene[] }
 export const emptyHistory = (): SceneHistory => ({ present: { stickers: [], regions: [], shapes: [], texts: [], adjust: { ...NEUTRAL_ADJUSTMENTS }, selectedId: null }, past: [], future: [] })

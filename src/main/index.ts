@@ -16,6 +16,7 @@ import { seedDefaultStickers } from './defaults'
 import { OutputStore } from './settings'
 import { outputSize, validOutput } from '../shared/output'
 import { validCropRect } from '../shared/crop'
+import { turnedSize } from '../shared/turn'
 import { PhotoStore, validDroppedPaths } from './photos'
 import { THUMB_SESSION_ID, THUMB_SIZE, validThumbSaveRequest, type ThumbSaveRequest } from '../shared/shapes'
 import { ToolStore, VideoStore, runTool } from './ffmpeg'
@@ -202,7 +203,7 @@ async function removePhoto(id: string) {
 
 async function save(request: SaveRequest): Promise<SaveReceipt | null> {
   if (!validSaveRequest(request)) throw new Error('유효하지 않은 저장 요청입니다.')
-  const record = photos.get(request.photoId), photo = record.info
+  const record = photos.get(request.photoId), photo = turnedSize(record.info, request.turn)
   if (request.png.byteLength > MAX_OUTPUT_BYTES) throw new Error('저장 이미지가 너무 큽니다.')
   const info = inspectImage(request.png, 'photo', true)
   if (request.crop && !validCropRect(request.crop, photo)) throw new Error('자르기 범위가 사진을 벗어났습니다.')

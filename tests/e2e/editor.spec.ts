@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, readFile, writeFile, rm, readdir, realpath } from 'node
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
+import type { ChildProcess } from 'node:child_process'
 import { PNG } from 'pngjs'
 import jpeg from 'jpeg-js'
 
@@ -12,6 +13,28 @@ let directory: string
 let source: string
 let stickerPath: string
 const errors: string[] = []
+// Every Electron launched by this worker; force-killed if the worker exits early (failure, timeout, Ctrl+C).
+// The child process is kept at launch: Playwright's app.process() returns undefined once the app is closed.
+const launched = new Map<ElectronApplication, ChildProcess>()
+const running = (child: ChildProcess) => child.exitCode === null && child.signalCode === null
+process.once('exit', () => { for (const child of launched.values()) if (running(child)) child.kill('SIGKILL') })
+async function launchApp(extraArgs: string[] = [], extraEnv: Record<string, string> = {}) {
+  const target = await electron.launch({ args: [resolve('out/main/index.js'), `--user-data-dir=${join(directory, 'profile')}`, ...extraArgs], env: { ...process.env, ELECTRON_RENDERER_URL: '', PHOTOKKUMI_DEFAULT_STICKERS: 'none', ...extraEnv } })
+  launched.set(target, target.process())
+  return target
+}
+const delay = (ms: number) => new Promise<void>(done => setTimeout(done, ms))
+// app.close() has hung before; fall back to killing the main process so no window outlives the test.
+async function closeApp(target: ElectronApplication) {
+  const child = launched.get(target)
+  if (child && running(child)) {
+    const exited = new Promise<void>(done => child.once('exit', () => done()))
+    await Promise.race([target.close().catch(() => undefined), delay(10_000)])
+    if (running(child)) child.kill('SIGKILL')
+    await Promise.race([exited, delay(5_000)])
+  } else if (!child) await target.close().catch(() => undefined)
+  launched.delete(target)
+}
 function makePng(width: number, height: number, pixel: (x: number, y: number) => number[]) {
   const image = new PNG({ width, height })
   for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) image.data.set(pixel(x, y), (y * width + x) * 4)
@@ -90,7 +113,7 @@ test.beforeEach(async () => {
   await writeFile(stickerPath, makePng(80, 40, (x, y) => y >= 30 ? [0, 0, 0, 0] : x < 40 ? [255, 0, 0, 255] : [0, 255, 0, 255]))
   const factor = test.info().project.metadata.deviceScaleFactor
   const scaleArgs = typeof factor === 'number' ? [`--force-device-scale-factor=${factor}`] : []
-  app = await electron.launch({ args: [resolve('out/main/index.js'), `--user-data-dir=${join(directory, 'profile')}`, ...scaleArgs], env: { ...process.env, ELECTRON_RENDERER_URL: '', PHOTOKKUMI_DEFAULT_STICKERS: 'none' } })
+  app = await launchApp(scaleArgs)
   page = await app.firstWindow()
   page.on('pageerror', error => errors.push(error.message))
   // The title is hidden below 960px (small CI screens at 200%), so wait for a control that is always shown.
@@ -101,7 +124,7 @@ test.beforeEach(async () => {
 test.afterEach(async () => {
   if (app) {
     if (page && !page.isClosed()) await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().forEach(window => window.destroy()))
-    await app.close().catch(error => { if (!page?.isClosed()) throw error })
+    await closeApp(app)
   }
   if (directory) await rm(directory, { recursive: true, force: true })
   expect(errors).toEqual([])
@@ -410,8 +433,8 @@ test('앱 종료 메뉴 요청에서 버리기를 선택하면 프로세스까�
 
 async function restartWithLibrary() {
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().forEach(window => window.destroy()))
-  await app.close().catch(error => { if (!page.isClosed()) throw error })
-  app = await electron.launch({ args: [resolve('out/main/index.js'), `--user-data-dir=${join(directory, 'profile')}`], env: { ...process.env, ELECTRON_RENDERER_URL: '', PHOTOKKUMI_DEFAULT_STICKERS: 'none' } })
+  await closeApp(app)
+  app = await launchApp()
   page = await app.firstWindow()
   page.on('pageerror', error => errors.push(error.message))
   // The title is hidden below 960px (small CI screens at 200%), so wait for a control that is always shown.
@@ -1615,8 +1638,8 @@ test('썸네일: 템플릿·편집 중 사진 배경·제목 유지 템플릿 �
   expect(jpeg.decode(await readFile(join(directory, '한글 사진_thumb_1.jpg'))).width).toBe(1080)
   expect(errors).toEqual([])
 
-  await app.close().catch(() => undefined)
-  app = await electron.launch({ args: [resolve('out/main/index.js'), `--user-data-dir=${join(directory, 'profile')}`], env: { ...process.env, ELECTRON_RENDERER_URL: '', PHOTOKKUMI_DEFAULT_STICKERS: 'none' } })
+  await closeApp(app)
+  app = await launchApp()
   page = await app.firstWindow()
   page.on('pageerror', error => errors.push(error.message))
   await page.getByRole('tab', { name: '썸네일 만들기' }).click()
@@ -1676,8 +1699,8 @@ function findFfmpeg() {
 }
 async function relaunch(env: Record<string, string>) {
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().forEach(window => window.destroy()))
-  await app.close().catch(error => { if (!page.isClosed()) throw error })
-  app = await electron.launch({ args: [resolve('out/main/index.js'), `--user-data-dir=${join(directory, 'profile')}`], env: { ...process.env, ELECTRON_RENDERER_URL: '', PHOTOKKUMI_DEFAULT_STICKERS: 'none', ...env } })
+  await closeApp(app)
+  app = await launchApp([], env)
   page = await app.firstWindow()
   page.on('pageerror', error => errors.push(error.message))
   // The title is hidden below 960px (small CI screens at 200%), so wait for a control that is always shown.

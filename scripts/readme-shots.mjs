@@ -9,7 +9,15 @@ import { URL } from 'node:url'
 // Regenerates docs/images/*.png from synthetic art: npm run build && npm run shots (needs ffmpeg for the GIF shot; resizing uses macOS sips).
 const ROOT = process.cwd(), OUT = resolve(ROOT, 'docs/images-raw'), W = 1280, H = 800
 const dir = await mkdtemp(join(tmpdir(), 'pk-readme-')), saved = join(dir, '결과'); await mkdir(saved); await mkdir(OUT, { recursive: true })
-const launch = (profile = 'profile') => electron.launch({ args: ['--force-device-scale-factor=2', resolve(ROOT, 'out/main/index.js'), `--user-data-dir=${join(dir, profile)}`], env: { ...process.env, ELECTRON_RENDERER_URL: '', PHOTOKKUMI_DEFAULT_STICKERS: 'none' } })
+// Kill every launched Electron when the script ends, even on a thrown error or Ctrl+C, so no window is left running.
+const launched = new Set()
+process.once('exit', () => { for (const child of launched) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL') })
+for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => process.exit(130))
+const launch = async (profile = 'profile') => {
+  const target = await electron.launch({ args: ['--force-device-scale-factor=2', resolve(ROOT, 'out/main/index.js'), `--user-data-dir=${join(dir, profile)}`], env: { ...process.env, ELECTRON_RENDERER_URL: '', PHOTOKKUMI_DEFAULT_STICKERS: 'none' } })
+  launched.add(target.process())
+  return target
+}
 let app = await launch(), page = await app.firstWindow()
 await app.evaluate(({ BrowserWindow }, [w, h]) => { const b = BrowserWindow.getAllWindows()[0]; b.setContentSize(w, h); b.center() }, [W, H])
 await page.getByRole('button', { name: '사진 열기', exact: true }).waitFor()

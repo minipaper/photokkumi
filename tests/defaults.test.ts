@@ -58,7 +58,8 @@ it('이미 같은 그림이 있으면 건너뛰고, 라이브러리 한도를 �
   await full.library.importFiles(own)
   await full.library.addBundled((await readBundledPack(full.bundle)).stickers)
   expect(full.library.list()).toHaveLength(100)
-})
+  // Writes and imports 99 real PNG files: about 5 s on the Windows CI runner, so the default 5 s limit is too tight.
+}, 30_000)
 
 it('경로 밖을 가리키거나 형식이 틀린 목록은 거부한다', async () => {
   const { bundle } = await pack(1)

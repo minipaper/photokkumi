@@ -1830,6 +1830,42 @@ test('기울기: 눈금자·숫자·방향키로 0.1° 단위 조절, 빈 귀퉁
   expect(createHash('sha256').update(await readFile(source)).digest('hex')).toBe(original)
 })
 
+test('자동 수평: 기울어진 수평선을 찾아 반대로 기울이고, 직선이 없으면 안내만 하며 값을 바꾸지 않는다', async () => {
+  // Sky above, ground below a horizon whose right end is 4° lower; noise keeps it photo-like.
+  let seed = 1
+  const noise = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return (seed / 2 ** 32 - 0.5) * 24 }
+  const t = Math.tan(4 * Math.PI / 180)
+  await writeFile(source, makePng(1200, 800, (x, y) => {
+    const ground = Math.max(0, Math.min(1, y + 0.5 - (360 + (x + 0.5 - 600) * t) + 0.5))
+    const v = 200 - 110 * ground + noise()
+    return [v, v + 10, v + 25, 255]
+  }))
+  const flat = join(directory, '질감.png')
+  await writeFile(flat, makePng(900, 600, () => { const v = 150 + noise() * 2; return [v, v, v, 255] }))
+  await select([flat, source]); await page.getByRole('button', { name: '사진 열기', exact: true }).click()
+  const angle = page.getByRole('spinbutton', { name: '기울기', exact: true }), tab = page.getByRole('tab', { name: /자르기/ })
+  // No straight line: only a message, the angle and the photo stay as they were.
+  await tab.click()
+  await page.getByRole('button', { name: '자동 수평', exact: true }).click()
+  await expect(page.getByRole('status')).toContainText('직선')
+  await expect(angle).toHaveValue('0')
+  await expect(page.getByRole('button', { name: '사진 1: 질감.png', exact: true })).not.toContainText('수정됨')
+  await page.getByRole('button', { name: '완료', exact: true }).click()
+
+  await page.getByRole('button', { name: '사진 2: 한글 사진.png', exact: true }).click()
+  await expect(page.getByRole('status')).toContainText('한글 사진.png · 편집 중')
+  await tab.click()
+  await page.getByRole('button', { name: '자동 수평', exact: true }).click()
+  await expect(page.getByRole('status')).toContainText('수평을 맞췄습니다')
+  expect(Math.abs(Number(await angle.inputValue()) + 4)).toBeLessThanOrEqual(0.3)
+  // Pressing it again keeps the same angle.
+  await page.getByRole('button', { name: '자동 수평', exact: true }).click()
+  await expect(page.getByRole('status')).toContainText('이미 자동 수평')
+  // One undo step back to level.
+  await page.getByTestId('canvas-area').focus(); await page.keyboard.press('ControlOrMeta+z')
+  await expect(angle).toHaveValue('0')
+})
+
 function findFfmpeg() {
   const { spawnSync } = process.getBuiltinModule('node:child_process') as typeof import('node:child_process')
   for (const candidate of [process.env.FFMPEG_PATH, 'ffmpeg', '/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg'].filter(Boolean) as string[]) {

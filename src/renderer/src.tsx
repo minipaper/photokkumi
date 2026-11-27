@@ -28,7 +28,8 @@ import { composePng } from './export'
 import { ADJUSTMENT_KEYS, isNeutral, sameAdjustments, NEUTRAL_ADJUSTMENTS, type Adjustments } from '../shared/filters'
 import { CROP_LABELS, CROP_PRESETS, aspectRatio, centeredCrop, cropArea, fullCrop, hasOrientation, isPortraitAspect, moveCrop, normalizeCrop, orient, sameCrop, type Crop, type CropAspect, type CropRect } from '../shared/crop'
 import { turnScene, turnedSize, type Turn } from '../shared/turn'
-import { renderOriented } from './turn-photo'
+import { renderOriented, sampleOriented } from './turn-photo'
+import { LEVEL_RANGE, estimateTilt } from '../shared/level'
 import { MAX_STRAIGHTEN, normalizeStraighten } from '../shared/straighten'
 import './style.css'
 const validTextDefaults = (value: unknown): value is { style: TextStyle; relSize: number } => {
@@ -319,6 +320,17 @@ function App() {
     if (straighten === undefined) delete next.straighten
     if (live) liveEdit(next); else { commitLive(); editScene(next) }
   }
+  /** 자동: finds the lean of the photo's straight lines (on the turned photo, before any tilt) and cancels it. */
+  const autoStraighten = () => run(async () => {
+    if (!rawPhoto || rawPhoto.id === THUMB) return
+    const present = currentHistory.current.present
+    const found = estimateTilt(sampleOriented(rawPhoto.bitmap, present.turn))
+    if (!found) { setStatus(`수평 기준이 될 직선(수평선·건물·테이블 모서리)을 찾지 못했습니다. 눈금자로 맞춰 주세요. (±${LEVEL_RANGE}° 안에서 찾습니다)`); return }
+    const target = normalizeStraighten(-found.tilt)
+    if (target === present.straighten) { setStatus(target ? `이미 자동 수평(${target}°)으로 맞춰져 있습니다.` : '이미 수평입니다.'); return }
+    changeStraighten(target ?? 0)
+    setStatus(target ? `자동으로 ${target}° 기울여 수평을 맞췄습니다. 눈금자로 더 다듬을 수 있습니다.` : '이미 수평이라 기울기를 0°로 두었습니다.')
+  })
   function straightenKey(event: KeyboardEvent<HTMLInputElement>) {
     // Shift+arrow tilts 1° at a time (the slider's own arrows move 0.1°).
     const sign = ({ ArrowLeft: -1, ArrowDown: -1, ArrowRight: 1, ArrowUp: 1 } as Record<string, number>)[event.key]
@@ -1227,12 +1239,15 @@ function App() {
               <button disabled={busy || !cropDraft} title="왼쪽으로 90° 돌리기" aria-label="왼쪽으로 90° 회전" onClick={() => turnPhoto(false)}>↺ 왼쪽</button>
               <button disabled={busy || !cropDraft} title="오른쪽으로 90° 돌리기" aria-label="오른쪽으로 90° 회전" onClick={() => turnPhoto(true)}>↻ 오른쪽</button>
             </div></div>
-            <div className="straighten-row"><span>기울기</span>
+            <div className="field-row"><span>기울기</span><div className="straighten-head">
+              <input type="number" aria-label="기울기" min={-MAX_STRAIGHTEN} max={MAX_STRAIGHTEN} step="0.1" disabled={busy || !cropDraft} value={scene.straighten ?? 0}
+                onChange={e => changeStraighten(e.target.valueAsNumber)} />
+              <button disabled={busy || !cropDraft} title={`사진 속 직선(수평선·건물·테이블 모서리)을 찾아 ±${LEVEL_RANGE}° 안에서 수평을 맞춥니다`} aria-label="자동 수평" onClick={autoStraighten}>자동</button>
+            </div></div>
+            <div className="straighten-row">
               <input type="range" className="ruler" aria-label="기울기 슬라이더" min={-MAX_STRAIGHTEN} max={MAX_STRAIGHTEN} step="0.1" disabled={busy || !cropDraft} value={scene.straighten ?? 0}
                 title="끌어서 수평을 맞춥니다 · 방향키 0.1°, Shift+방향키 1° · 두 번 클릭하면 0°" onDoubleClick={() => changeStraighten(0)} onKeyDown={straightenKey}
                 onChange={e => changeStraighten(e.target.valueAsNumber, true)} onPointerUp={commitLive} onKeyUp={commitLive} onBlur={commitLive} />
-              <input type="number" aria-label="기울기" min={-MAX_STRAIGHTEN} max={MAX_STRAIGHTEN} step="0.1" disabled={busy || !cropDraft} value={scene.straighten ?? 0}
-                onChange={e => changeStraighten(e.target.valueAsNumber)} />
             </div>
             <div className="crop-presets" role="radiogroup" aria-label="자르기 비율">
               {CROP_PRESETS.map(base => {
@@ -1247,13 +1262,13 @@ function App() {
             </div></div>
             <p className="crop-size">자를 크기 <strong data-testid="crop-size" data-x={cropDraft?.crop.x} data-y={cropDraft?.crop.y}>{cropDraft ? `${cropDraft.crop.width} × ${cropDraft.crop.height} px` : '-'}</strong></p>
             <div className="crop-actions">
-              <button className="primary" disabled={busy || !cropDraft} title="Enter" onClick={finishCrop}>완료</button>
+              <button className="primary" disabled={busy || !cropDraft} title="Enter · 방향키로 자를 상자 1px, Shift+방향키 10px 이동" onClick={finishCrop}>완료</button>
               <button disabled={busy || !cropDraft} title="Esc — 이 탭을 열기 전 범위로" onClick={cancelCrop}>취소</button>
               <button disabled={busy || !cropDraft || (cropDraft.crop.width === cropDraft.width && cropDraft.crop.height === cropDraft.height)} title="자르지 않은 원본 전체로 (잘린 부분은 원본에 남아 언제든 다시 넓힐 수 있습니다)" onClick={resetCrop}>원래대로</button>
               <button disabled={busy || !cropDraft || photos.length < 2 || !aspect || aspect === 'free' || aspect === 'original'}
                 title="다른 사진을 같은 비율로 가운데를 자릅니다 (세로 사진은 세로 비율로)" onClick={applyCropToAll}>모든 사진에 이 비율</button>
             </div>
-            <p className="hint">{photo ? 'Enter 완료 · Esc 취소 · 방향키로 상자 이동' : '사진을 열면 자를 수 있습니다.'}</p>
+            {!photo && <p className="hint">사진을 열면 자르고 돌릴 수 있습니다.</p>}
           </section>
         })() : sideTab === 'text' ? textPanel : sideTab === 'adjust' ? <section className="adjust-panel" aria-label="사진 보정">
           {ADJUSTMENT_KEYS.map(key => {

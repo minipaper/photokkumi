@@ -175,8 +175,10 @@ aside {
 .crop-panel .field-row .segmented { flex: 0 1 170px; }
 .crop-turn { flex: 0 1 170px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .crop-turn button { height: 30px; padding: 0 6px; font-size: 12px; }
-.straighten-row { display: grid; grid-template-columns: auto 1fr 56px; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
-.straighten-row input[type=number] { width: 56px; height: 28px; text-align: right; }
+.straighten-head { display: flex; gap: 6px; }
+.straighten-head input[type=number] { width: 60px; height: 28px; text-align: right; }
+.straighten-head button { height: 28px; padding: 0 10px; font-size: 12px; }
+.straighten-row { display: flex; margin-top: -4px; }
 /* A ruler like phone galleries: a tick every 5° (18 steps over ±45°), a longer one at 0°, and the angle as an accent bar. */
 .straighten-row .ruler { -webkit-appearance: none; appearance: none; width: 100%; min-width: 0; height: 24px; margin: 0; padding: 0 3px; border: 0; cursor: ew-resize;
   background: linear-gradient(var(--muted), var(--muted)) center / 1px 14px no-repeat,

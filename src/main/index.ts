@@ -10,7 +10,7 @@ import { inspectImage, MAX_OUTPUT_BYTES, MAX_PIXELS } from './images'
 import { decodeHeicInWorker, fitPixels, withIccProfile } from './heic'
 import heicWorker from './heic-worker?modulePath'
 import { saveUnique, SaveCleanupError } from './files'
-import { allowedPermission, bundleFileType, trustedSender, validSaveRequest } from './security'
+import { SCRIPT_CSP, allowedPermission, bundleFileType, trustedSender, validSaveRequest } from './security'
 import { StickerLibrary, readBounded } from './library'
 import { seedDefaultStickers } from './defaults'
 import { OutputStore } from './settings'
@@ -385,7 +385,7 @@ app.whenReady().then(() => {
     const mime = bundleFileType(url.pathname, extname(file))
     if (url.host !== 'bundle' || !file.startsWith(bundleRoot + sep) || !mime) return new Response(null, { status: 403 })
     try {
-      return new Response(await readFile(file), { headers: { 'Content-Type': mime } })
+      return new Response(await readFile(file), { headers: { 'Content-Type': mime, ...(mime === 'text/javascript' ? { 'Content-Security-Policy': SCRIPT_CSP } : {}) } })
     } catch { return new Response(null, { status: 404 }) }
   })
   // Everything is denied except reading the installed font list for the text tool.

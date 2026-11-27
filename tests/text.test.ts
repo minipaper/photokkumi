@@ -137,6 +137,13 @@ describe('글꼴 관련 main 권한', () => {
   })
   it('번들에서 글꼴은 /fonts/ 아래 woff2·ttf만 제공한다', () => {
     expect(bundleFileType('/fonts/jua/Jua-Regular.woff2', '.woff2')).toBe('font/woff2')
+    // Face finder: the model only from /models/, WebAssembly only from the build's /assets/.
+    expect(bundleFileType('/models/yunet/yunet.onnx', '.onnx')).toBe('application/octet-stream')
+    expect(bundleFileType('/assets/ort-wasm-simd-threaded-abc.wasm', '.wasm')).toBe('application/wasm')
+    expect(bundleFileType('/fonts/x.onnx', '.onnx')).toBeNull()
+    expect(bundleFileType('/models/yunet/LICENSE', '')).toBeNull()
+    expect(bundleFileType('/models/x.wasm', '.wasm')).toBeNull()
+    expect(bundleFileType('/assets/x.onnx', '.onnx')).toBeNull()
     expect(bundleFileType('/fonts/nanumpen/NanumPenScript-Regular.ttf', '.ttf')).toBe('font/ttf')
     expect(bundleFileType('/assets/x.woff2', '.woff2')).toBeNull()
     expect(bundleFileType('/fonts/jua/OFL.txt', '.txt')).toBeNull()

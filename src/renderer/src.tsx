@@ -21,7 +21,7 @@ const validRegionEffect = (value: unknown): value is { style: 'blur' | 'mosaic';
   const v = value as Record<string, unknown> | null
   return !!v && typeof v === 'object' && ['blur', 'mosaic'].includes(v.style as string) && typeof v.strength === 'number' && validStrength(v.strength) && ['ellipse', 'rect'].includes(v.shape as string)
 }
-import { addInstance, addRegion, addShape, addText, applyLayout, applyTheme, setBackground, updateSelectedShape, clearRegions, clearTexts, updateSelectedText, setAdjustments, updateSelectedRegion, validStrength, updateSelected, removeSelected, duplicateSelected, reorderSelected, emptyHistory, commitScene, undoScene, redoScene, MAX_INSTANCES, MAX_DECODED_STICKER_PIXELS, type Scene, type SceneHistory } from '../shared/scene'
+import { addInstance, addRegion, addShape, addText, applyLayout, applyTheme, setBackground, updateSelectedShape, clearRegions, clearTexts, updateSelectedText, setAdjustments, updateSelectedRegion, validStrength, updateSelected, removeSelected, duplicateSelected, reorderSelected, emptyHistory, commitScene, undoScene, redoScene, MAX_INSTANCES, MAX_REGIONS, MAX_DECODED_STICKER_PIXELS, type Scene, type SceneHistory } from '../shared/scene'
 import { createPhotoSession, editPhotoSession, savePhotoSession, discardPhotoSession, sessionAssets, type PhotoSession } from '../shared/photo-session'
 import { DEFAULT_OUTPUT, validOutput, outputSize, outputKey, type OutputSettings } from '../shared/output'
 import { composePng } from './export'
@@ -30,6 +30,8 @@ import { CROP_LABELS, CROP_PRESETS, aspectRatio, centeredCrop, cropArea, fullCro
 import { turnScene, turnedSize, type Turn } from '../shared/turn'
 import { renderOriented, sampleOriented } from './turn-photo'
 import { LEVEL_RANGE, estimateTilt } from '../shared/level'
+import { faceRegion } from '../shared/faces'
+import { detectFaces } from './face-detect'
 import { MAX_STRAIGHTEN, normalizeStraighten } from '../shared/straighten'
 import './style.css'
 const validTextDefaults = (value: unknown): value is { style: TextStyle; relSize: number } => {
@@ -240,6 +242,32 @@ function App() {
     liveBase.current = null
     applyHistory(commitScene({ ...currentHistory.current, present: base }, currentHistory.current.present))
   }
+  /**
+   * 얼굴 자동 가리기: finds faces in the photo as shown and adds an ellipse region on each with the current
+   * blur/mosaic and strength, as one undo step. Faces already under a region are skipped, so pressing it again adds nothing.
+   */
+  const autoBlurFaces = () => run(async () => {
+    if (!photo || photo.id === THUMB || mode !== 'photo') return
+    commitLive()
+    setStatus('얼굴을 찾는 중…')
+    const { faces, scale } = await detectFaces(photo.bitmap)
+    const current = currentHistory.current.present
+    const covered = (x: number, y: number) => current.regions.some(item => ((x - item.x) / (item.width / 2)) ** 2 + ((y - item.y) / (item.height / 2)) ** 2 <= 1)
+    let next = current, added = 0, skipped = 0, over = 0
+    for (const face of faces) {
+      const box = faceRegion(face, scale, photo)
+      if (!box) continue
+      if (covered(box.x, box.y)) { skipped++; continue }
+      if (next.regions.length >= MAX_REGIONS) { over++; continue }
+      next = addRegion(next, { id: crypto.randomUUID(), ...box, rotation: 0, style: regionDefaults.style, strength: regionDefaults.strength, shape: 'ellipse' })
+      added++
+    }
+    if (added) editScene({ ...next, selectedId: null })
+    const effect = regionDefaults.style === 'blur' ? '블러' : '모자이크'
+    setStatus(added
+      ? `얼굴 ${added}곳을 ${effect}로 가렸습니다.${skipped ? ` 이미 가린 ${skipped}곳은 건너뛰었습니다.` : ''}${over ? ` 한 사진 최대 ${MAX_REGIONS}곳이라 ${over}곳은 넣지 못했습니다.` : ''} 놓친 얼굴은 직접 그리고, 잘못 잡힌 곳은 선택해 지우세요.`
+      : skipped ? `찾은 얼굴 ${skipped}곳은 이미 가려져 있습니다.` : '얼굴을 찾지 못했습니다. 작거나 옆을 본 얼굴은 놓칠 수 있으니 직접 그려 가려 주세요.')
+  })
   function changeRegionEffect(effect: RegionEffect, live = false) {
     if (!validStrength(effect.strength)) return
     setRegionDefaults(effect)
@@ -1204,6 +1232,8 @@ function App() {
           <button role="tab" aria-selected={sideTab === 'crop'} title="자르기·회전 (C)" onClick={() => openTab('crop')}>자르기{(!!scene.crop || !!scene.turn || !!scene.straighten) && <span className="tab-dot" aria-label="(적용됨)" />}</button>
         </div>
         {sideTab === 'regions' ? <section className="region-panel" aria-label="블러·모자이크">
+          <button className="face-auto" disabled={busy || !photo} onClick={autoBlurFaces}
+            title="사진 속 사람 얼굴을 찾아 아래 방식·강도로 가립니다. 사진은 PC 밖으로 나가지 않습니다. 작거나 옆을 본 얼굴은 놓칠 수 있습니다.">☺ 얼굴 자동 가리기</button>
           <div className="region-fields" role="group" aria-label="가림 효과">
             <div className="field-row"><span>모양</span><div className="segmented" role="radiogroup" aria-label="가림 모양">
               {(['ellipse', 'rect'] as RegionShape[]).map(shape => <button key={shape} role="radio" aria-checked={effect.shape === shape} disabled={busy}

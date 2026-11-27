@@ -7,8 +7,10 @@ export default defineConfig({
   renderer: { plugins: [react(), {
     name: 'local-csp',
     transformIndexHtml(html, context) {
-      const script = context.server ? "'self' 'unsafe-inline'" : "'self'"
-      const connect = context.server ? "'self' ws://localhost:* ws://127.0.0.1:*" : "'none'"
+      // 'wasm-unsafe-eval' lets the face finder compile its bundled WebAssembly (not JS eval); connect-src 'self'
+      // lets it read the bundled model and runtime from app://bundle. Every other origin stays blocked (docs/face-blur.md).
+      const script = context.server ? "'self' 'unsafe-inline' 'wasm-unsafe-eval'" : "'self' 'wasm-unsafe-eval'"
+      const connect = context.server ? "'self' ws://localhost:* ws://127.0.0.1:*" : "'self'"
       return html.replace('__CSP__', `default-src 'none'; script-src ${script}; style-src 'self' 'unsafe-inline'; img-src 'self' app: blob: data:; font-src 'self'; connect-src ${connect}; base-uri 'none'; form-action 'none'; frame-src 'none'`)
     }
   }] }

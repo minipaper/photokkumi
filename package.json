@@ -70,6 +70,7 @@
     "image-size": "2.0.4",
     "konva": "10.9.1",
     "libheif-js": "1.23.5",
+    "onnxruntime-web": "1.31.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "react-konva": "19.3.2",

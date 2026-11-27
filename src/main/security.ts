@@ -14,9 +14,19 @@ export function allowedPermission(permission: string, origin: string, allowedUrl
 }
 const BUNDLE_TYPES: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' }
 const FONT_TYPES: Record<string, string> = { '.woff2': 'font/woff2', '.ttf': 'font/ttf' }
-/** MIME type for a file served from the renderer bundle; fonts only from /fonts/. null = refuse. */
+/**
+ * CSP sent with the bundle's scripts. Workers (PNG encoding, face finding) take their policy from their script's
+ * response, not from the page, so they get the same limits: own files only, WebAssembly but no JS eval.
+ */
+export const SCRIPT_CSP = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'"
+/** MIME type for a file served from the renderer bundle; fonts only from /fonts/, the face model only from /models/,
+ * WebAssembly only from the build's /assets/. null = refuse. */
 export function bundleFileType(pathname: string, extension: string): string | null {
-  return BUNDLE_TYPES[extension] ?? (pathname.startsWith('/fonts/') ? FONT_TYPES[extension] ?? null : null)
+  if (BUNDLE_TYPES[extension]) return BUNDLE_TYPES[extension]
+  if (pathname.startsWith('/fonts/')) return FONT_TYPES[extension] ?? null
+  if (pathname.startsWith('/models/') && extension === '.onnx') return 'application/octet-stream'
+  if (pathname.startsWith('/assets/') && extension === '.wasm') return 'application/wasm'
+  return null
 }
 export function validSaveRequest(value: unknown): value is SaveRequest {
   if (!value || typeof value !== 'object') return false

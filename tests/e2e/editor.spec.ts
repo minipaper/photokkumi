@@ -254,6 +254,21 @@ test('안전한 창 설정·IPC 거부·잘못된 이미지 거부', async () =>
   const rejected = await page.evaluate(() => window.photokkumi.saveImage({ photoId: '00000000-0000-0000-0000-000000000000', png: new Uint8Array([137]), output: { format: 'png', resizeEnabled: false, resizeBasis: 'width', landscapeSize: 1600, portraitSize: 900, preventUpscale: true, quality: 100 } }))
   expect(rejected.ok).toBe(false)
   expect(await app.evaluate(async ({ net }) => (await net.fetch('app://bundle/../../package.json')).status)).toBe(403)
+  // Face finder: the page may compile WebAssembly and read its own files, nothing more (no JS eval, no other origin).
+  const csp = await page.locator('meta[http-equiv="Content-Security-Policy"]').getAttribute('content')
+  expect(csp).toContain("script-src 'self' 'wasm-unsafe-eval'"); expect(csp).toContain("connect-src 'self'"); expect(csp).not.toContain("'unsafe-eval'")
+  const violation = await page.evaluate(() => new Promise<string>(resolve => {
+    document.addEventListener('securitypolicyviolation', event => resolve(event.effectiveDirective), { once: true })
+    void fetch('https://example.com/').catch(() => undefined)
+  }))
+  expect(violation).toBe('connect-src')
+  // Scripts (and so workers) carry the same limits; the model and runtime are served only from their own folders.
+  const worker = (await readdir(resolve('out/renderer/assets'))).find(name => name.startsWith('face-worker-'))!
+  const served = await app.evaluate(async ({ net }, name) => {
+    const script = await net.fetch(`app://bundle/assets/${name}`), model = await net.fetch('app://bundle/models/yunet/yunet.onnx')
+    return [script.headers.get('content-security-policy'), model.status, model.headers.get('content-type'), (await net.fetch('app://bundle/models/yunet/LICENSE')).status]
+  }, worker)
+  expect(served).toEqual(["default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'", 200, 'application/octet-stream', 403])
 })
 
 test('EXIF 회전 JPG를 한 번만 회전하고 메타데이터 없이 저장한다', async () => {
@@ -1864,6 +1879,66 @@ test('자동 수평: 기울어진 수평선을 찾아 반대로 기울이고, �
   // One undo step back to level.
   await page.getByTestId('canvas-area').focus(); await page.keyboard.press('ControlOrMeta+z')
   await expect(angle).toHaveValue('0')
+})
+
+/** Simple drawn faces (no real person): hair, skin oval, eyes with whites, brows, nose, mouth, neck and shoulders. */
+function drawnFaces(width: number, height: number, faces: { cx: number; cy: number; r: number }[]) {
+  const inside = (x: number, y: number, cx: number, cy: number, rx: number, ry: number) => ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1
+  return makePng(width, height, (x, y) => {
+    let color = [120, 160, 200, 255]
+    for (const { cx, cy, r } of faces) {
+      if (inside(x, y, cx, cy + r * 1.9, r * 1.5, r * 0.9)) color = [60, 70, 140, 255]
+      if (inside(x, y, cx, cy + r * 1.05, r * 0.35, r * 0.4)) color = [220, 175, 145, 255]
+      if (inside(x, y, cx, cy - r * 0.15, r * 0.88, r * 1.12)) color = [60, 40, 30, 255]
+      if (inside(x, y, cx, cy + r * 0.05, r * 0.75, r * 0.98) && y > cy - r * 0.55) color = [230, 185, 155, 255]
+      for (const side of [-1, 1]) {
+        if (inside(x, y, cx + side * r * 0.3, cy - r * 0.08, r * 0.17, r * 0.08)) color = [250, 250, 250, 255]
+        if (inside(x, y, cx + side * r * 0.3, cy - r * 0.08, r * 0.075, r * 0.075)) color = [40, 30, 25, 255]
+        if (inside(x, y, cx + side * r * 0.3, cy - r * 0.27, r * 0.2, r * 0.04)) color = [70, 50, 40, 255]
+      }
+      if (inside(x, y, cx, cy + r * 0.2, r * 0.09, r * 0.17)) color = [200, 150, 125, 255]
+      if (inside(x, y, cx, cy + r * 0.5, r * 0.25, r * 0.07)) color = [170, 80, 80, 255]
+    }
+    return color
+  })
+}
+test('얼굴 자동 가리기: 그린 얼굴 두 개를 오프라인에서 찾아 한 번에 가리고, 다시 눌러도 겹치지 않으며, 얼굴이 없으면 안내만 한다', async () => {
+  await writeFile(source, drawnFaces(1200, 600, [{ cx: 350, cy: 260, r: 90 }, { cx: 850, cy: 260, r: 90 }]))
+  const empty = join(directory, '풍경.png')
+  await writeFile(empty, makePng(900, 600, (_x, y) => y < 300 ? [130, 180, 230, 255] : [90, 140, 70, 255]))
+  const original = createHash('sha256').update(await readFile(source)).digest('hex')
+  await select([empty, source]); await page.getByRole('button', { name: '사진 열기', exact: true }).click()
+  const auto = page.getByRole('button', { name: '☺ 얼굴 자동 가리기', exact: true }), count = page.getByTestId('region-count')
+  await page.getByRole('button', { name: '블러·모자이크', exact: true }).click()
+  await auto.click()
+  await expect(page.getByRole('status')).toContainText('얼굴을 찾지 못했습니다', { timeout: 20_000 })
+  await expect(count).toHaveText('0')
+  await expect(page.getByRole('button', { name: '사진 1: 풍경.png', exact: true })).not.toContainText('수정됨')
+
+  await page.getByRole('button', { name: '사진 2: 한글 사진.png', exact: true }).click()
+  await expect(page.getByRole('status')).toContainText('한글 사진.png · 편집 중')
+  await page.getByRole('radio', { name: '모자이크', exact: true }).click()
+  await auto.click()
+  await expect(page.getByRole('status')).toContainText('얼굴 2곳을 모자이크로 가렸습니다', { timeout: 20_000 })
+  await expect(count).toHaveText('2')
+  // Pressing again finds the same faces under the existing regions and adds nothing.
+  await auto.click()
+  await expect(page.getByRole('status')).toContainText('이미 가려져 있습니다')
+  await expect(count).toHaveText('2')
+
+  await save()
+  const result = await output()
+  // Each eye (pupil and white) is now part of a mosaic block; the sky far from the faces is untouched.
+  for (const cx of [350, 850]) for (const side of [-1, 1]) {
+    const x = Math.round(cx + side * 27), y = 253
+    expect(pixel(result, x, y)).not.toEqual([40, 30, 25, 255])
+  }
+  expect(pixel(result, 20, 20)).toEqual([120, 160, 200, 255])
+  expect(pixel(result, 600, 100)).toEqual([120, 160, 200, 255])
+  // One undo step removes both regions.
+  await page.getByTestId('canvas-area').focus(); await page.keyboard.press('ControlOrMeta+z')
+  await expect(count).toHaveText('0')
+  expect(createHash('sha256').update(await readFile(source)).digest('hex')).toBe(original)
 })
 
 function findFfmpeg() {

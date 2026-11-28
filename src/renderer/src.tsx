@@ -7,6 +7,7 @@ import { LibraryPanel } from './LibraryPanel'
 import { EditorCanvas } from './EditorCanvas'
 import { GifMaker } from './GifMaker'
 import { StickerMaker } from './StickerMaker'
+import { CollageMaker } from './CollageMaker'
 import type { VideoRef } from '../shared/gif'
 import type { UpdateState } from '../shared/update'
 import { loadPref, savePref } from './remember'
@@ -24,7 +25,7 @@ const validRegionEffect = (value: unknown): value is { style: 'blur' | 'mosaic';
 import { addInstance, addRegion, addShape, addText, applyLayout, applyTheme, setBackground, updateSelectedShape, clearRegions, clearTexts, updateSelectedText, setAdjustments, updateSelectedRegion, validStrength, updateSelected, removeSelected, duplicateSelected, reorderSelected, emptyHistory, commitScene, undoScene, redoScene, MAX_INSTANCES, MAX_REGIONS, MAX_DECODED_STICKER_PIXELS, type Scene, type SceneHistory } from '../shared/scene'
 import { createPhotoSession, editPhotoSession, savePhotoSession, discardPhotoSession, sessionAssets, type PhotoSession } from '../shared/photo-session'
 import { DEFAULT_OUTPUT, validOutput, outputSize, outputKey, type OutputSettings } from '../shared/output'
-import { composePng } from './export'
+import { composeBitmap, composePng } from './export'
 import { ADJUSTMENT_KEYS, isNeutral, sameAdjustments, NEUTRAL_ADJUSTMENTS, type Adjustments } from '../shared/filters'
 import { CROP_LABELS, CROP_PRESETS, aspectRatio, centeredCrop, cropArea, fullCrop, hasOrientation, isPortraitAspect, moveCrop, normalizeCrop, orient, sameCrop, type Crop, type CropAspect, type CropRect } from '../shared/crop'
 import { turnScene, turnedSize, type Turn } from '../shared/turn'
@@ -46,6 +47,7 @@ function selectedKind(scene: Scene): 'stickers' | 'regions' | 'text' | 'shapes' 
 }
 
 declare global { interface Window { photokkumi: PhotoApi } }
+type Mode = 'photo' | 'gif' | 'thumb' | 'maker' | 'collage'
 const THUMB = THUMB_SESSION_ID
 const blobUrl = (blob: Blob) => new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result as string); reader.onerror = () => reject(new Error('미리보기를 만들 수 없습니다.')); reader.readAsDataURL(blob) })
 interface DecodedAsset extends Omit<ImageAsset, 'bytes'> { bitmap: ImageBitmap }
@@ -132,7 +134,7 @@ function App() {
   function storeMyPresets(next: MyPreset[]) { setMyPresets(next); savePref('pk.textPresets', next) }
   const textArea = useRef<HTMLTextAreaElement>(null)
   const focusNewText = useRef(false)
-  const [mode, setMode] = useState<'photo' | 'gif' | 'thumb' | 'maker'>('photo')
+  const [mode, setMode] = useState<Mode>('photo')
   type ThumbTab = 'template' | 'background' | 'text' | 'deco'
   const [thumbTab, setThumbTab] = useState<ThumbTab>('template')
   const [templateFilter, setTemplateFilter] = useState<TemplateFilter>('all')
@@ -159,6 +161,7 @@ function App() {
   const [incomingVideo, setIncomingVideo] = useState<{ ref: VideoRef; nonce: number } | null>(null)
   const [gifBusy, setGifBusy] = useState(false)
   const [makerBusy, setMakerBusy] = useState(false)
+  const [collageBusy, setCollageBusy] = useState(false)
   const showError = useCallback((text: string) => setError(text), [])
   const showStatus = useCallback((text: string) => setStatus(text), [])
   const activeSession = photo ? sessions.current.get(photo.id) : undefined
@@ -592,7 +595,7 @@ function App() {
   }
   function handleEditorKey(event: KeyboardEvent<HTMLElement>) {
     const target = event.target
-    if (mode === 'gif' || mode === 'maker') return
+    if (mode === 'gif' || mode === 'maker' || mode === 'collage') return
     if (event.defaultPrevented || event.nativeEvent.isComposing || event.altKey
       || operation.current || closeRequest || pendingPhoto || libraryOpen || (target instanceof HTMLElement
         && (target.isContentEditable || target.closest('input, textarea, select, dialog, [role="textbox"]')))) return
@@ -700,6 +703,7 @@ function App() {
     const added = imported.find(item => !before.has(item.id))
     if (videos[0]) { setMode('gif'); setIncomingVideo({ ref: videos[0], nonce: Date.now() }) }
     else if (mode === 'thumb') { if (added) changeBackground({ photoId: added.id, zoom: 100, focusX: 50, focusY: 50, hidePhoto: undefined }) }
+    else if (mode === 'collage') { /* new photos show up in the collage's photo strip */ }
     else if (added || !rejected.length) {
       if (activeId.current === THUMB) await restorePhotoSession()
       setMode('photo')
@@ -830,6 +834,23 @@ function App() {
       throw error
     }
   })
+  // ---- 사진 합치기 ----
+  /** A photo exactly as 저장 would write it at original size (turn, tilt, crop, adjustments, regions, stickers, texts), for the collage. */
+  const renderEditedPhoto = useCallback(async (id: string): Promise<ImageBitmap> => {
+    const session = sessions.current.get(id)
+    if (!session) throw new Error('사진 목록에 없는 사진입니다.')
+    const present = session.history.present
+    const result = await window.photokkumi.readPhoto(id)
+    if (!result.ok) throw new Error(result.error)
+    const raw = await decode(result.value)
+    let oriented: ImageBitmap | null = null
+    try {
+      if (present.turn || present.straighten) oriented = renderOriented(raw.bitmap, present.turn, present.straighten)
+      return await composeBitmap(oriented ?? raw.bitmap, present.stickers, assets.current, DEFAULT_OUTPUT, present.regions, present.adjust, present.texts, [], present.crop)
+    } finally { raw.bitmap.close(); oriented?.close() }
+  }, [])
+  const editsOf = useCallback((id: string) => sessions.current.get(id)?.history.present, [])
+  const turnOf = useCallback((id: string) => sessions.current.get(id)?.history.present.turn, [])
   // ---- 썸네일 만들기 ----
   async function thumbPhotoSource(id: string | null): Promise<ImageBitmap | null> {
     if (!id) return null
@@ -880,10 +901,12 @@ function App() {
     const next = emptyHistory()
     currentHistory.current = next; setHistory(next); setDirty(false); setStatus('사진을 열어 시작하세요.')
   }
-  const switchMode = (next: 'photo' | 'gif' | 'thumb' | 'maker') => {
+  const switchMode = (next: Mode) => {
     if (next === mode) return
     setSettingsOpen(false)
-    if (next === 'gif' || next === 'maker' || (next === 'photo' && activeId.current !== THUMB)) { commitLive(); setMode(next); return }
+    // The collage uses each photo as it would be saved, so a crop still being edited becomes its undo step first.
+    if (next === 'collage') commitCrop()
+    if (next === 'gif' || next === 'maker' || next === 'collage' || (next === 'photo' && activeId.current !== THUMB)) { commitLive(); setMode(next); return }
     void run(async () => {
       commitLive()
       if (next === 'thumb') await openThumbSession(); else await restorePhotoSession()
@@ -1029,7 +1052,7 @@ function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
   const hasFiles = (event: DragEvent) => Array.from(event.dataTransfer.types).includes('Files')
-  const dropBlocked = busy || gifBusy || makerBusy || !!pendingPhoto || !!closeRequest || libraryOpen
+  const dropBlocked = busy || gifBusy || makerBusy || collageBusy || !!pendingPhoto || !!closeRequest || libraryOpen
   const effect: RegionEffect = region ? { style: region.style, strength: region.strength, shape: region.shape ?? 'ellipse' } : regionDefaults
   const numericFields = selection ? <div className="placement-detail">
     <button className="disclosure" aria-expanded={fieldsOpen} onClick={toggleFields}><span className="chevron" aria-hidden="true">▸</span>위치·크기 숫자로 조정</button>
@@ -1110,10 +1133,11 @@ function App() {
     <header className="toolbar">
       <h1>포토꾸미</h1>
       <div className="mode-tabs" role="tablist" aria-label="작업 모드">
-        <button role="tab" aria-selected={mode === 'photo'} disabled={gifBusy || makerBusy} onClick={() => switchMode('photo')}><span className="label">사진 편집</span><span className="label-short">사진</span></button>
-        <button role="tab" aria-selected={mode === 'thumb'} disabled={busy || gifBusy || makerBusy} onClick={() => switchMode('thumb')}><span className="label">썸네일 만들기</span><span className="label-short">썸네일</span></button>
-        <button role="tab" aria-label="스티커 만들기" aria-selected={mode === 'maker'} disabled={busy || gifBusy} onClick={() => switchMode('maker')}><span className="label">스티커 만들기</span><span className="label-short">스티커</span></button>
-        <button role="tab" aria-label="동영상" aria-selected={mode === 'gif'} disabled={busy || makerBusy} onClick={() => switchMode('gif')}><span className="label">동영상</span><span className="label-short">영상</span></button>
+        <button role="tab" aria-selected={mode === 'photo'} disabled={gifBusy || makerBusy || collageBusy} onClick={() => switchMode('photo')}><span className="label">사진 편집</span><span className="label-short">사진</span></button>
+        <button role="tab" aria-selected={mode === 'thumb'} disabled={busy || gifBusy || makerBusy || collageBusy} onClick={() => switchMode('thumb')}><span className="label">썸네일 만들기</span><span className="label-short">썸네일</span></button>
+        <button role="tab" aria-label="사진 합치기" aria-selected={mode === 'collage'} disabled={busy || gifBusy || makerBusy} onClick={() => switchMode('collage')}><span className="label">사진 합치기</span><span className="label-short">합치기</span></button>
+        <button role="tab" aria-label="스티커 만들기" aria-selected={mode === 'maker'} disabled={busy || gifBusy || collageBusy} onClick={() => switchMode('maker')}><span className="label">스티커 만들기</span><span className="label-short">스티커</span></button>
+        <button role="tab" aria-label="동영상" aria-selected={mode === 'gif'} disabled={busy || makerBusy || collageBusy} onClick={() => switchMode('gif')}><span className="label">동영상</span><span className="label-short">영상</span></button>
       </div>
       <div className="photo-tools" hidden={mode !== 'thumb'}>
         <nav aria-label="썸네일 사진" className="toolbar-group">
@@ -1192,7 +1216,11 @@ function App() {
       <StickerMaker active={mode === 'maker'} outputFolder={outputFolder} onBusyChange={setMakerBusy} onSaved={setOutputFolder}
         onLibrary={setLibraryItems} onStatus={showStatus} onError={showError} />
     </div>
-    <section className="workspace" hidden={mode === 'gif' || mode === 'maker'}>
+    <div className="gif-host" hidden={mode !== 'collage'}>
+      <CollageMaker active={mode === 'collage'} photos={photos} outputFolder={outputFolder} editsOf={editsOf} turnOf={turnOf} renderPhoto={renderEditedPhoto}
+        onBusyChange={setCollageBusy} onSaved={setOutputFolder} onStatus={showStatus} onError={showError} />
+    </div>
+    <section className="workspace" hidden={mode === 'gif' || mode === 'maker' || mode === 'collage'}>
       <div className="canvas-column">
         {mode === 'thumb' ? (photo ? <EditorCanvas key={photo.id} photo={photo} assets={assets.current} scene={scene} disabled={busy} onChange={(id, value) => change(value, id)} selectionTools={editTools}
           onSelect={selectFromCanvas} info={<>썸네일 · {THUMB_SIZE} × {THUMB_SIZE} px · {thumbFormat === 'jpg' ? 'JPG' : 'PNG'} · <b className={dirty ? 'dirty' : ''}>{dirty ? '수정됨' : sessions.current.get(THUMB)?.saved ? '저장됨' : '새 썸네일'}</b></>} />
@@ -1359,7 +1387,8 @@ function App() {
     </section>}
     <footer className="statusbar"><p role="status" aria-live="polite">{status || (mode === 'photo' && photo ? <span className="shortcuts">Ctrl+S 저장 · Ctrl+Z 실행 취소 · Ctrl+D 복제 · Delete 삭제 · B 블러·모자이크 · T 글자 · C 자르기 · Ctrl+휠 확대</span>
   : mode === 'thumb' ? <span className="shortcuts">Ctrl+S 썸네일 저장 · Ctrl+Z 실행 취소 · Ctrl+D 복제 · Delete 삭제 · T 글자</span>
-  : mode === 'maker' ? <span className="shortcuts">Ctrl+S PNG로 저장 · 문장에서 [ ]로 감싼 글자는 강조됩니다</span> : '')}</p>{error && !libraryOpen && !pendingPhoto && <p role="alert">{error}</p>}
+  : mode === 'maker' ? <span className="shortcuts">Ctrl+S PNG로 저장 · 문장에서 [ ]로 감싼 글자는 강조됩니다</span>
+  : mode === 'collage' ? <span className="shortcuts">Ctrl+S 합친 사진 저장 · 칸 끌기 위치 · 휠 확대 · 방향키 이동 · +/− 확대</span> : '')}</p>{error && !libraryOpen && !pendingPhoto && <p role="alert">{error}</p>}
       <div className="update-area" role="group" aria-label="업데이트">
         {update?.status === 'available' && dismissedUpdate !== update.version && <>
           <span className="update-note">새 버전 {update.version}</span>

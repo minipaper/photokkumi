@@ -101,7 +101,7 @@ const fits = (size: Size) => size.width <= COLLAGE_MAX_SIDE && size.height <= CO
  * Cell rectangles for the options. `photos` are the (edited) photo sizes of a stack, in order; grid layouts ignore them.
  * A stack taller than the limits is shrunk as a whole (width, gap and radius together) until it fits.
  */
-export function planCollage(options: Pick<CollageOptions, 'layout' | 'width' | 'gap' | 'margin' | 'radius'>, photos: readonly Size[] = []): CollagePlan {
+export function planCollage(options: Pick<CollageOptions, 'layout' | 'gap' | 'margin' | 'radius'> & { width: number }, photos: readonly Size[] = []): CollagePlan {
   const layout = layoutById(options.layout)
   if (!layout.rows && (photos.length < STACK_MIN || photos.length > STACK_MAX)) throw new Error(`세로 이어붙이기는 사진 ${STACK_MIN}~${STACK_MAX}장입니다.`)
   if (photos.some(photo => !(photo.width > 0 && photo.height > 0 && Number.isFinite(photo.width) && Number.isFinite(photo.height)))) throw new Error('사진 크기를 확인할 수 없습니다.')

@@ -500,3 +500,46 @@ dialog.maker-batch { width: min(440px, 92vw); }
 .gif-fields label.check input { width: auto; }
 /* Short windows (down to the 580px minimum): drop the footer note so the settings never scroll. */
 @media (max-height: 660px) { .gif-footer > .hint { display: none; } }
+/* 사진 합치기: preview with cell buttons over it, one settings panel (never scrolls at 760×580) and the photo strip below. */
+.collage-host { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.collage-host .maker-workspace { min-height: 0; }
+.collage-stage { flex: 1; min-height: 0; display: grid; place-items: center; overflow: hidden; }
+.collage-frame { position: relative; box-shadow: 0 2px 14px #0002; line-height: 0; }
+.collage-frame canvas { display: block; }
+.collage-cell { position: absolute; height: auto; padding: 0; border: 0; background: none; cursor: grab; touch-action: none; }
+.collage-cell:hover:not(:disabled) { background: #ffffff1a; border: 0; }
+.collage-cell:active { cursor: grabbing; }
+.collage-cell[aria-pressed=true] { background: none; outline: 3px solid var(--accent); outline-offset: -3px; }
+.collage-cell[data-swap] { outline: 3px dashed var(--accent); outline-offset: -3px; }
+.collage-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 9px; padding: 10px 12px; overflow: hidden; }
+.collage-panel > * { flex: none; }
+.collage-layouts { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; }
+.collage-layouts button { height: 34px; padding: 0; display: grid; place-items: center; color: var(--muted); }
+.collage-layouts button[aria-checked=true] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.collage-range { display: grid; grid-template-columns: 44px 1fr 52px; gap: 6px; color: var(--muted); font-size: 12px; }
+.collage-range input[type=range] { width: 100%; height: auto; padding: 0; border: 0; background: none; accent-color: var(--accent); }
+.collage-range input[type=number] { width: 52px; text-align: right; }
+.collage-zoom { text-align: right; font-variant-numeric: tabular-nums; }
+.collage-panel label.check { font-size: 12px; }
+.collage-colors { display: flex; align-items: center; gap: 7px; }
+.collage-colors .swatch { width: 22px; height: 22px; padding: 0; border-radius: 50%; border: 1px solid #00000033; }
+.collage-colors .swatch[aria-checked=true] { outline: 2px solid var(--accent); outline-offset: 2px; }
+.collage-colors input.color { margin-left: auto; }
+.collage-output { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: center; }
+.collage-output label { color: var(--muted); font-size: 12px; }
+.collage-output select { flex: 1; }
+.collage-selected { display: grid; gap: 7px; padding-top: 9px; border-top: 1px solid var(--line); }
+.collage-selected h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.collage-actions { display: grid; grid-template-columns: 1fr auto; gap: 6px; }
+.collage-actions button { height: 28px; padding: 0 8px; font-size: 12px; }
+@media (max-width: 960px) { .collage-colors { gap: 5px; } .collage-colors .swatch { width: 20px; height: 20px; } }
+/* Short windows (down to 580px): tighter rows so the collage panel fits without scrolling. */
+@media (max-height: 660px) {
+  .collage-panel { gap: 6px; padding: 8px 12px; }
+  .collage-layouts button { height: 30px; }
+  .collage-selected { gap: 5px; padding-top: 6px; }
+  .collage-host .maker-footer { gap: 6px; padding: 8px 12px; }
+  .collage-host .maker-save { height: 34px; }
+}
+.collage-host .view-tools .hint { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.collage-host .view-tools .maker-size { flex: none; }

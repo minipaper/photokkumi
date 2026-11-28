@@ -1174,7 +1174,7 @@ function App() {
       </div>
       <div className="photo-tools" hidden={mode !== 'photo'}>
       <nav aria-label="파일 작업" className="toolbar-group">
-        <button onClick={choosePhoto} disabled={busy || !!pendingPhoto}>사진 열기</button>
+        <button className="photo-open" aria-label="사진 열기" onClick={choosePhoto} disabled={busy || !!pendingPhoto}><span className="label">사진 열기</span><span className="label-short">열기</span></button>
         <button className="folder-open" aria-label="폴더 열기" onClick={choosePhotoFolder} disabled={busy || !!pendingPhoto}><span className="label">폴더 열기</span><span className="label-short">폴더</span></button>
       </nav>
       <div className="toolbar-group" aria-label="편집 이력">
@@ -1191,8 +1191,8 @@ function App() {
       </div>
       <div className="toolbar-spacer" />
       <div className="settings-anchor" ref={settingsAnchor}>
-        <button className={`settings-toggle${outputError ? ' invalid' : ''}`} aria-expanded={settingsOpen} aria-controls="output-settings" onClick={() => setSettingsOpen(open => !open)}>
-          저장 설정 <span className="summary">{outputSummary}</span> ▾
+        <button className={`settings-toggle${outputError ? ' invalid' : ''}`} aria-label="저장 설정" title={`저장 설정 · ${outputSummary}`} aria-expanded={settingsOpen} aria-controls="output-settings" onClick={() => setSettingsOpen(open => !open)}>
+          <span className="label">저장 설정 </span><svg className="label-short" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></svg><span className="summary">{outputSummary}</span> ▾
         </button>
         <div id="output-settings" className="settings-popover" hidden={!settingsOpen} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); setSettingsOpen(false) } }}>
           <div className="settings-row folder">

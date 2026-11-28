@@ -191,7 +191,14 @@ test('사진 합치기: 2×2·세로 이어붙이기 저장 픽셀, 편집 반�
   for (const tab of [page.getByRole('tab').first(), page.getByRole('tab', { name: /썸네일/ })]) {
     await tab.click()
     await expect(tab).toHaveAttribute('aria-selected', 'true')
-    expect(await page.evaluate(() => { const bar = document.querySelector('.toolbar')!; return { wide: bar.scrollWidth > bar.clientWidth + 1, tall: bar.getBoundingClientRect().height > 52 } })).toEqual({ wide: false, tall: false })
+    const bar = await page.evaluate(() => {
+      const toolbar = document.querySelector('.toolbar')!
+      const spacer = [...toolbar.querySelectorAll('.toolbar-spacer')].find(item => (item as HTMLElement).offsetParent)
+      return { wide: toolbar.scrollWidth > toolbar.clientWidth + 1, tall: toolbar.getBoundingClientRect().height > 52, spare: spacer?.getBoundingClientRect().width ?? 0 }
+    })
+    expect({ wide: bar.wide, tall: bar.tall }).toEqual({ wide: false, tall: false })
+    // Windows' Malgun Gothic is wider than the macOS fonts: keep room here so the Windows toolbar still fits.
+    if (process.platform === 'darwin') expect(bar.spare).toBeGreaterThanOrEqual(80)
   }
 
   // Originals are byte-for-byte unchanged.

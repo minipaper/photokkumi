@@ -399,11 +399,12 @@ aside .thumb-panel[aria-label=꾸미기] { flex: none; max-height: 52%; border-b
   .toolbar { gap: 6px; padding: 6px 8px; }
   .toolbar-group { padding-left: 6px; }
   .toolbar button:not(.icon) { padding: 0 9px; }
-  .toolbar .mode-tabs button { padding: 0 6px; }
+  .toolbar .mode-tabs button { padding: 0 5px; }
   .draw-toggle .label { display: none; }
-  /* Windows' Malgun Gothic is wider than macOS fonts: blur is icon-only and 폴더 열기 shortens so four mode tabs fit at 760px. */
-  .folder-open .label-short, .mode-tabs .label-short { display: inline; }
-  .folder-open .label { display: none; }
+  /* Windows' Malgun Gothic is wider than macOS fonts. With five mode tabs at 760px: tabs use short names, blur is icon-only, 사진/폴더 열기 → 열기/폴더 and 저장 설정 → gear (names kept in aria-label). */
+  .folder-open .label-short, .photo-open .label-short, .mode-tabs .label-short { display: inline; }
+  .settings-toggle .label-short { display: inline-block; }
+  .folder-open .label, .photo-open .label, .settings-toggle .label { display: none; }
   .mode-tabs .label { display: none; }
   .text-toggle .label { display: none; }
   .text-fields .field-row .segmented.three { grid-template-columns: repeat(3, 24px); }

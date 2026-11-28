@@ -129,5 +129,6 @@ export class VideoStore {
     if (!record) throw new Error('허용되지 않은 동영상입니다.')
     return record
   }
+  get size() { return this.records.size }
   clear() { this.records.clear() }
 }

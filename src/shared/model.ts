@@ -1,6 +1,7 @@
 import type { OutputSettings } from './output'
 import type { GifOptions, GifReceipt, ToolStatus, VideoInfo, VideoRef } from './gif'
 import type { Mp4Options } from './video'
+import type { VideoOverlayRequest } from './video-overlay'
 import type { LibrarySticker, StickerMetadata, LibraryImportResult } from './library'
 import type { UpdateState } from './update'
 import type { ThumbSaveRequest } from './shapes'
@@ -67,8 +68,8 @@ export interface PhotoApi {
   chooseGifTool(): Promise<Result<ToolStatus | null>>
   openVideo(): Promise<Result<VideoRef | null>>
   loadVideo(id: string): Promise<Result<VideoInfo>>
-  createGif(id: string, options: GifOptions): Promise<Result<GifReceipt | null>>
-  exportMp4(id: string, options: Mp4Options): Promise<Result<GifReceipt | null>>
+  createGif(id: string, options: GifOptions, overlays: VideoOverlayRequest | null): Promise<Result<GifReceipt | null>>
+  exportMp4(id: string, options: Mp4Options, overlays: VideoOverlayRequest | null): Promise<Result<GifReceipt | null>>
   cancelGif(): Promise<Result<null>>
   onGifProgress(callback: (ratio: number) => void): () => void
   removePhoto(id: string): Promise<Result<PhotoInfo[]>>

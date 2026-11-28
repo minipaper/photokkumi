@@ -14,7 +14,7 @@ it('미리보기 FPS는 긴 동영상일수록 줄여 프레임 수를 제한한
   expect(previewArgs('in.mov', 5)).toContain('fps=5,scale=640:-2')
 })
 it('ffmpeg 인자는 shell 없이 쓰는 고정 배열이며 원본보다 크게 만들지 않는다', () => {
-  const args = gifArgs('C:\\사진\\a b.mov', 'C:\\tmp\\o.gif', { start: 1.25, end: 3, width: 640, fps: 10 }, { width: 360, color: 'sdr' })
+  const args = gifArgs('C:\\사진\\a b.mov', 'C:\\tmp\\o.gif', { start: 1.25, end: 3, width: 640, fps: 10 }, { width: 360, height: 640, color: 'sdr' })
   expect(args.slice(args.indexOf('-ss'), args.indexOf('-ss') + 4)).toEqual(['-ss', '1.250', '-t', '1.750'])
   expect(args[args.indexOf('-i') + 1]).toBe('C:\\사진\\a b.mov')
   expect(args[args.indexOf('-filter_complex') + 1]).toContain('[0:v]fps=10,scale=360:-1:flags=lanczos,format=rgb24,split')
@@ -48,11 +48,11 @@ it('자르기는 영상 안의 정수 영역(16px 이상)만 받고, ffmpeg에�
   expect(cropFits(crop, { width: 742, height: 720 })).toBe(true); expect(cropFits(crop, { width: 741, height: 720 })).toBe(false)
   expect(cropFilter(crop)).toEqual(['crop=640:720:100:0']); expect(cropFilter(undefined)).toEqual([])
   // Crop first (display pixels, after ffmpeg's autorotate), and the GIF is never wider than the crop.
-  const args = gifArgs('in.mov', 'o.gif', { ...ok, width: 800, crop }, { width: 1280, color: 'sdr' })
+  const args = gifArgs('in.mov', 'o.gif', { ...ok, width: 800, crop }, { width: 1280, height: 720, color: 'sdr' })
   expect(args[args.indexOf('-filter_complex') + 1]).toMatch(/^\[0:v\]crop=640:720:100:0,fps=12,scale=640:-1:flags=lanczos,/)
 })
 it('HDR 영상(HLG·PQ)은 GIF·미리보기 모두 SDR로 바꾼다', () => {
-  const hlg = gifArgs('in.mov', 'o.gif', { start: 0, end: 1, width: 320, fps: 10 }, { width: 1080, color: 'hlg' })
+  const hlg = gifArgs('in.mov', 'o.gif', { start: 0, end: 1, width: 320, fps: 10 }, { width: 1080, height: 1920, color: 'hlg' })
   expect(hlg[hlg.indexOf('-filter_complex') + 1]).toMatch(/scale=320:-1:flags=lanczos,scale=in_color_matrix=bt2020,format=gbrp16le,lutrgb=.*blend=all_mode=multiply,colorchannelmixer=.*,format=rgb24,split\[a\]\[b\]/)
   expect(previewArgs('in.mov', 5, 'pq').join(' ')).toMatch(/fps=5,scale=640:-2,scale=in_color_matrix=bt2020,format=gbrp16le,lutrgb/)
 })

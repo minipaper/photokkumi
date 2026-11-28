@@ -2,8 +2,8 @@
  * MP4 export from the 동영상 mode (docs/video.md). Uses the user's own ffmpeg like GIF: a fixed argument array,
  * numbers only from validated options. Times are seconds in the source; sizes are display pixels (rotation applied).
  */
-import { chain, cropFilter, croppedWidth, validCropShape, type VideoCrop, type VideoSource } from './gif'
-import { toneMapFilter } from './hdr'
+import { croppedWidth, frameGraph, validCropShape, type VideoCrop, type VideoSource } from './gif'
+import type { OverlayFiles } from './video-overlay'
 /** 0 = keep the (cropped) width. */
 export const MP4_WIDTHS = [0, 1920, 1280, 1080, 720, 480] as const
 export const MAX_MP4_SECONDS = 600
@@ -30,17 +30,16 @@ export function mp4Width(options: Pick<Mp4Options, 'width' | 'crop'>, videoWidth
   const source = croppedWidth(options.crop, videoWidth)
   return Math.floor(Math.min(options.width || source, source) / 2) * 2
 }
-export function mp4Args(input: string, output: string, options: Mp4Options, source: VideoSource, encoder: H264Encoder): string[] {
+export function mp4Args(input: string, output: string, options: Mp4Options, source: VideoSource, encoder: H264Encoder, overlays?: OverlayFiles): string[] {
   const width = mp4Width(options, source.width)
   // SDR BT.709 out, tagged as such: HDR is tone-mapped first (players would otherwise guess the colours).
-  const filters = chain(...cropFilter(options.crop), `scale=${width}:-2:flags=lanczos`, toneMapFilter(source.color),
-    'scale=out_color_matrix=bt709:out_range=tv', 'format=yuv420p')
+  const frames = frameGraph(source, options.crop, [], `scale=${width}:-2:flags=lanczos`, ['scale=out_color_matrix=bt709:out_range=tv', 'format=yuv420p'], overlays)
   // x264 by quality; the system encoders take a bitrate (about 4 bits per output pixel per second, 2–12 Mbps).
   const quality = encoder === 'libx264' ? ['-preset', 'medium', '-crf', '20', '-profile:v', 'high']
     : ['-b:v', `${Math.max(2, Math.min(12, Math.round(width * width * 9 / 16 * 4 / 1e6)))}M`]
   const audio = options.audio ? ['-map', '0:a:0?', '-c:a', 'aac', '-b:a', '160k'] : ['-an']
   return ['-hide_banner', '-nostdin', '-loglevel', 'error', '-progress', 'pipe:1', '-ss', options.start.toFixed(3), '-t', (options.end - options.start).toFixed(3),
-    '-i', input, '-map', '0:v:0', ...audio, '-sn', '-dn', '-vf', filters, '-c:v', encoder, ...quality,
+    '-i', input, ...frames.inputs, '-filter_complex', `${frames.graph}[vout]`, '-map', '[vout]', ...audio, '-sn', '-dn', '-c:v', encoder, ...quality,
     '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-color_range', 'tv',
     // No location or camera metadata from the phone, and the index up front so the clip starts playing at once on the web.
     '-map_metadata', '-1', '-map_chapters', '-1', '-movflags', '+faststart', '-f', 'mp4', '-y', output]

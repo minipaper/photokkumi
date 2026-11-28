@@ -574,6 +574,18 @@ function App() {
       setStatus('스티커를 추가했습니다. 클릭해 선택하고 각각 이동·크기·회전을 조절하세요.')
     } finally { await syncReferences() }
   }
+  /** A library sticker for the 동영상 mode: decoded once and shared with the photo editor's cache. */
+  async function loadVideoSticker(id: string) {
+    const cached = assets.current.get(id)
+    if (cached) return cached
+    const result = await window.photokkumi.useSticker(id)
+    if (!result.ok) throw new Error(result.error)
+    const total = [...assets.current.values()].reduce((sum, item) => sum + item.width * item.height, 0)
+    if (total + result.value.width * result.value.height > MAX_DECODED_STICKER_PIXELS) throw new Error('스티커 이미지 메모리 한도입니다. 사진 편집의 배치·실행취소 이력을 비운 뒤 다시 시도하세요.')
+    const decoded = await decode(result.value)
+    assets.current.set(id, decoded)
+    return decoded
+  }
   const useSticker = (id: string) => run(async () => {
     const cached = assets.current.get(id)
     if (cached) { await placeSticker({ ...cached, bytes: new Uint8Array() }); return }
@@ -1185,7 +1197,7 @@ function App() {
       </div>
     </header>
     <div className="gif-host" hidden={mode !== 'gif'}>
-      <GifMaker incoming={incomingVideo} outputFolder={outputFolder} active={mode === 'gif'} onBusyChange={setGifBusy}
+      <GifMaker incoming={incomingVideo} outputFolder={outputFolder} active={mode === 'gif'} onBusyChange={setGifBusy} library={libraryProps} loadSticker={loadVideoSticker}
         onSaved={receipt => setOutputFolder(receipt.folderLabel)} onStatus={showStatus} onError={showError} />
     </div>
     <div className="gif-host" hidden={mode !== 'maker'}>

@@ -243,8 +243,13 @@ test('안전한 창 설정·IPC 거부·잘못된 이미지 거부', async () =>
   await expect(page.getByRole('button', { name: '다시 시작해서 설치', exact: true })).toBeVisible()
   expect((await page.evaluate(() => window.photokkumi.loadVideo('../../etc/passwd'))).ok).toBe(false)
   expect((await page.evaluate(() => window.photokkumi.loadVideo('00000000-0000-4000-8000-000000000000'))).ok).toBe(false)
-  expect((await page.evaluate(() => window.photokkumi.createGif('00000000-0000-4000-8000-000000000000', { start: 0, end: 1, width: 480, fps: 12 }))).ok).toBe(false)
-  expect((await page.evaluate(() => window.photokkumi.createGif('00000000-0000-4000-8000-000000000000', { start: 0, end: 1, width: 4800, fps: 12 }))).ok).toBe(false)
+  expect((await page.evaluate(() => window.photokkumi.createGif('00000000-0000-4000-8000-000000000000', { start: 0, end: 1, width: 480, fps: 12 }, null))).ok).toBe(false)
+  expect((await page.evaluate(() => window.photokkumi.createGif('00000000-0000-4000-8000-000000000000', { start: 0, end: 1, width: 4800, fps: 12 }, null))).ok).toBe(false)
+  // Overlays: masks must match the regions, PNGs stay within limits; checked before the video ID is even looked up.
+  expect(await page.evaluate(() => window.photokkumi.exportMp4('00000000-0000-4000-8000-000000000000', { start: 0, end: 1, width: 0, audio: true },
+    { regions: [{ x: 10, y: 10, width: 20, height: 20, rotation: 0, style: 'blur', strength: 50, shape: 'ellipse' }], masks: [], layer: null }))).toEqual({ ok: false, error: '유효하지 않은 GIF 요청입니다.' })
+  expect(await page.evaluate(() => window.photokkumi.exportMp4('00000000-0000-4000-8000-000000000000', { start: 0, end: 1, width: 0, audio: true },
+    { regions: [], masks: [], layer: new Uint8Array(65 * 1024 * 1024) }))).toEqual({ ok: false, error: '유효하지 않은 GIF 요청입니다.' })
   expect((await page.evaluate(() => window.photokkumi.removePhoto('00000000-0000-4000-8000-000000000000'))).ok).toBe(false)
   const corrupt = join(directory, 'corrupt.png'); await writeFile(corrupt, '<svg/>')
   await select(corrupt); await page.getByRole('button', { name: '사진 열기', exact: true }).click()
@@ -2079,6 +2084,62 @@ test('동영상 MP4: 형식 선택, 3:4 자르기 상자 이동, 소리 유지/�
   expect(silent).toMatch(/360x480/); expect(silent).not.toMatch(/Audio:/)
   expect(createHash('sha256').update(await readFile(clip)).digest('hex')).toBe(originalHash)
   // No hidden temporary file is left next to the results.
+  expect((await readdir(directory)).filter(name => name.endsWith('.tmp'))).toEqual([])
+  expect(errors).toEqual([])
+})
+
+test('동영상 가리기·스티커: 영상 위에 모자이크 영역 그리기·undo, 라이브러리 스티커 올리기, MP4 전 구간 적용', async () => {
+  const ffmpeg = findFfmpeg()
+  test.skip(!ffmpeg, 'ffmpeg가 설치되지 않은 환경')
+  const { spawnSync } = process.getBuiltinModule('node:child_process') as typeof import('node:child_process')
+  test.skip(!/^\s*V\S*\s+(libx264|h264_mf|h264_videotoolbox)\s/m.test(spawnSync(ffmpeg!, ['-hide_banner', '-encoders'], { encoding: 'utf8' }).stdout), 'H.264 인코더가 없는 ffmpeg')
+  await register(stickerPath)
+  // 2s 320×240 of 8px black/white vertical stripes: hidden parts turn flat grey.
+  const clip = join(directory, '번호판 영상.mp4')
+  expect(spawnSync(ffmpeg!, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', "color=c=white:s=320x240:r=10:d=2,geq=lum='if(mod(floor(X/8),2),235,16)':cb=128:cr=128",
+    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '10', clip]).status).toBe(0)
+  await drop([clip])
+  await expect(page.getByTestId('gif-frame')).toBeVisible({ timeout: 20_000 })
+  await page.getByRole('radio', { name: 'MP4 · 동영상' }).click()
+
+  await page.getByRole('tab', { name: '가리기', exact: true }).click()
+  await page.getByRole('radio', { name: '모자이크' }).click()
+  const frame = page.getByTestId('canvas-frame')
+  await expect(frame).toBeVisible()
+  const box = (await frame.boundingBox())!
+  // Rectangle-ish drag over the left third of the frame (video x 40–120, y 80–160).
+  await page.getByRole('radio', { name: '▭ 사각형' }).click()
+  await page.mouse.move(box.x + box.width * 0.125, box.y + box.height / 3); await page.mouse.down()
+  await page.mouse.move(box.x + box.width * 0.375, box.y + box.height * 2 / 3, { steps: 8 }); await page.mouse.up()
+  await expect(page.getByTestId('video-region-count')).toHaveText('1')
+  await page.keyboard.press('ControlOrMeta+z')
+  await expect(page.getByTestId('video-region-count')).toHaveText('0')
+  await page.keyboard.press('ControlOrMeta+Shift+z')
+  await expect(page.getByTestId('video-region-count')).toHaveText('1')
+
+  await page.getByRole('tab', { name: '스티커', exact: true }).click()
+  await page.getByRole('button', { name: '투명 스티커 배치', exact: true }).click()
+  await expect(page.getByRole('tab', { name: /스티커1/ })).toBeVisible()
+  await page.getByRole('tab', { name: /^저장/ }).click()
+  await expect(page.getByTestId('video-placed')).toHaveText('가림 1개 · 스티커 1개를 영상 전체에 넣어 저장합니다.')
+  await expect(page.getByTestId('video-overlay-preview')).toBeVisible()
+
+  await select(directory)
+  await page.getByRole('button', { name: 'MP4로 저장' }).click()
+  await expect(page.getByRole('status')).toContainText('MP4 저장 완료 · 번호판 영상_kkumi.mp4', { timeout: 60_000 })
+  const out = join(directory, '번호판 영상_kkumi.mp4')
+  for (const time of ['0.2', '1.8']) {
+    const gray = spawnSync(ffmpeg!, ['-hide_banner', '-loglevel', 'error', '-ss', time, '-i', out, '-frames:v', '1', '-vf', 'format=gray', '-f', 'rawvideo', 'pipe:1']).stdout
+    const row = (y: number, from: number, to: number) => Array.from({ length: to - from }, (_, i) => gray[y * 320 + from + i])
+    const spread = (values: number[]) => Math.max(...values) - Math.min(...values)
+    // Inside the region: 10px mosaic blocks (80px region × 50% × 0.25) on a grid from the video origin, each one flat;
+    // any 10px of the 8px stripes would hold both black and white. Outside, the stripes stay.
+    for (const block of [50, 60, 70, 80, 90, 100]) expect(spread(row(120, block, block + 10)), `${time}s block ${block}`).toBeLessThan(40)
+    expect(spread(row(120, 200, 240)), `${time}s outside`).toBeGreaterThan(150)
+    // The sticker (red left half of an 80×40 PNG) sits at the centre: 40×20 video px around (160, 120).
+    const rgb = spawnSync(ffmpeg!, ['-hide_banner', '-loglevel', 'error', '-ss', time, '-i', out, '-frames:v', '1', '-vf', 'crop=4:4:146:112,scale=1:1,format=rgb24', '-f', 'rawvideo', 'pipe:1']).stdout
+    expect(rgb[0], `${time}s sticker ${[...rgb]}`).toBeGreaterThan(180); expect(rgb[1]).toBeLessThan(80)
+  }
   expect((await readdir(directory)).filter(name => name.endsWith('.tmp'))).toEqual([])
   expect(errors).toEqual([])
 })

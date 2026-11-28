@@ -17,3 +17,7 @@ docs/images-raw/
 # Font build tool (scripts/prepare-fonts.py)
 .venv/
 .font-cache/
+
+# Claude Code local worktrees and settings
+.claude/worktrees/
+.claude/settings.local.json

@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, protocol, screen, session } from 'electron'
 import { mkdirSync, readFileSync, rmSync } from 'node:fs'
-import { open, readFile, realpath, stat, lstat, unlink } from 'node:fs/promises'
+import { mkdtemp, open, readFile, realpath, rm, stat, lstat, unlink, writeFile } from 'node:fs/promises'
 import { basename, delimiter, dirname, extname, join, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { ImageAsset, Result, SaveRequest, SaveReceipt } from '../shared/model'
@@ -21,6 +21,7 @@ import { PhotoStore, validDroppedPaths } from './photos'
 import { THUMB_SESSION_ID, THUMB_SIZE, validThumbSaveRequest, type ThumbSaveRequest } from '../shared/shapes'
 import { ToolStore, VideoStore, runTool } from './ffmpeg'
 import { VIDEO_EXTENSIONS, cropFits, validGifOptions, gifArgs, previewArgs, previewFps, parseProbe, splitJpegs, parseProgress, type GifOptions, type GifReceipt, type VideoInfo, type VideoRef } from '../shared/gif'
+import { maskBounds, pngSize, validOverlayRequest, type OverlayFiles, type VideoOverlayRequest } from '../shared/video-overlay'
 import { isMp4, mp4Args, pickH264Encoder, validMp4Options, type H264Encoder, type Mp4Options } from '../shared/video'
 import type { ChildProcess } from 'node:child_process'
 import { autoUpdater } from 'electron-updater'
@@ -157,17 +158,38 @@ async function loadVideo(id: string): Promise<VideoInfo> {
   Object.assign(record, { width: info.width, height: info.height, duration: info.duration, hasAudio: info.hasAudio, color: info.color })
   return { ...record.ref, ...info, previewFps: fps, frames }
 }
-async function createGif(id: string, options: GifOptions): Promise<GifReceipt | null> {
+/**
+ * Checks the renderer's overlay PNGs against the video and writes them to a private temp folder for ffmpeg.
+ * Sizes come from main's own math (mask = region bounds, layer = whole frame); `release` removes the folder.
+ */
+async function overlayFiles(record: { width?: number; height?: number }, request: VideoOverlayRequest | null): Promise<{ files?: OverlayFiles; release(): Promise<void> }> {
+  if (!request) return { release: async () => undefined }
+  const video = { width: record.width!, height: record.height! }
+  if (!validOverlayRequest(request, video)) throw new Error('가림·스티커 설정을 확인하세요.')
+  const same = (bytes: Uint8Array, size: { width: number; height: number }) => { const found = pngSize(bytes); return !!found && found.width === size.width && found.height === size.height }
+  if (request.layer && !same(request.layer, video)) throw new Error('스티커 이미지 크기가 동영상과 맞지 않습니다.')
+  if (!request.masks.every((mask, i) => same(mask, maskBounds(request.regions[i], video)))) throw new Error('가림 영역 모양을 확인하세요.')
+  const folder = await mkdtemp(join(app.getPath('temp'), 'photokkumi-overlay-'))
+  const release = () => rm(folder, { recursive: true, force: true }).catch(() => undefined)
+  try {
+    const layer = request.layer ? join(folder, 'layer.png') : null
+    if (layer) await writeFile(layer, request.layer!, { flag: 'wx', mode: 0o600 })
+    const masks = await Promise.all(request.masks.map(async (mask, i) => { const path = join(folder, `mask-${i}.png`); await writeFile(path, mask, { flag: 'wx', mode: 0o600 }); return path }))
+    return { files: { regions: request.regions, layer, masks }, release }
+  } catch (error) { await release(); throw error }
+}
+async function createGif(id: string, options: GifOptions, overlays: VideoOverlayRequest | null = null): Promise<GifReceipt | null> {
   const ffmpeg = tools.require(), record = videos.get(id)
   if (!record.duration || !record.width || !record.height || !validGifOptions(options, record.duration) || !cropFits(options.crop, record as { width: number; height: number })) throw new Error('GIF 구간·크기 설정을 확인하세요.')
   const directory = await videoOutputDirectory('GIF를 저장할 폴더')
   if (!directory) return null
   const temporary = join(app.getPath('temp'), `photokkumi-${randomUUID()}.gif`)
   const job: { child?: ChildProcess; temporary?: string } = { temporary }
+  const extra = await overlayFiles(record, overlays)
   gifJob = job
   try {
     const length = options.end - options.start
-    const result = await runTool(ffmpeg, gifArgs(record.path, temporary, options, { width: record.width, color: record.color ?? 'sdr' }), {
+    const result = await runTool(ffmpeg, gifArgs(record.path, temporary, options, { width: record.width, height: record.height, color: record.color ?? 'sdr' }, extra.files), {
       timeoutMs: 600_000, maxStdout: 16 << 20, signal: job,
       onStdout: chunk => { const time = parseProgress(chunk.toString('utf8')); if (time !== null) win?.webContents.send('gif:progress', Math.min(1, time / length)) }
     })
@@ -186,6 +208,7 @@ async function createGif(id: string, options: GifOptions): Promise<GifReceipt | 
   } finally {
     if (gifJob === job) gifJob = null
     await unlink(temporary).catch(() => undefined)
+    await extra.release()
   }
 }
 async function videoOutputDirectory(title: string) {
@@ -204,7 +227,7 @@ async function h264Encoder(ffmpeg: string) {
   if (!encoder) throw new Error('이 ffmpeg로는 MP4(H.264)를 만들 수 없습니다. 안내의 정식 빌드(gyan.dev·BtbN·Homebrew)를 설치하세요.')
   return encoder
 }
-async function exportMp4(id: string, options: Mp4Options): Promise<GifReceipt | null> {
+async function exportMp4(id: string, options: Mp4Options, overlays: VideoOverlayRequest | null = null): Promise<GifReceipt | null> {
   const ffmpeg = tools.require(), record = videos.get(id)
   if (!record.duration || !record.width || !record.height || !validMp4Options(options, record.duration) || !cropFits(options.crop, record as { width: number; height: number })) throw new Error('MP4 구간·크기 설정을 확인하세요.')
   const encoder = await h264Encoder(ffmpeg)
@@ -215,10 +238,11 @@ async function exportMp4(id: string, options: Mp4Options): Promise<GifReceipt | 
   // Written next to the result so the final name is a hard link, not a copy of a large file. Hidden until then.
   const temporary = join(directory, `.${randomUUID()}.tmp`)
   const job: { child?: ChildProcess; temporary?: string } = { temporary }
+  const extra = await overlayFiles(record, overlays)
   gifJob = job
   try {
     const length = options.end - options.start
-    const result = await runTool(ffmpeg, mp4Args(record.path, temporary, { ...options, audio: options.audio && !!record.hasAudio }, { width: record.width, color: record.color ?? 'sdr' }, encoder), {
+    const result = await runTool(ffmpeg, mp4Args(record.path, temporary, { ...options, audio: options.audio && !!record.hasAudio }, { width: record.width, height: record.height, color: record.color ?? 'sdr' }, encoder, extra.files), {
       timeoutMs: 30 * 60_000, maxStdout: 16 << 20, signal: job,
       onStdout: chunk => { const time = parseProgress(chunk.toString('utf8')); if (time !== null) win?.webContents.send('gif:progress', Math.min(1, time / length)) }
     })
@@ -239,6 +263,7 @@ async function exportMp4(id: string, options: Mp4Options): Promise<GifReceipt | 
   } finally {
     if (gifJob === job) gifJob = null
     await unlink(temporary).catch(() => undefined)
+    await extra.release()
   }
 }
 const MAX_MP4_BYTES = 4 * 1024 ** 3
@@ -472,8 +497,9 @@ app.whenReady().then(() => {
     'gif:tool-choose': { count: 0, lock: true, run: chooseTool },
     'gif:open-video': { count: 0, lock: true, run: openVideo },
     'gif:load-video': { count: 1, lock: true, valid: args => validAssetId(args[0]), run: id => loadVideo(id as string) },
-    'gif:create': { count: 2, lock: true, valid: args => validAssetId(args[0]) && validGifOptions(args[1]), run: (id, options) => createGif(id as string, options as GifOptions) },
-    'video:export-mp4': { count: 2, lock: true, valid: args => validAssetId(args[0]) && validMp4Options(args[1]), run: (id, options) => exportMp4(id as string, options as Mp4Options) },
+    // The third argument is null or the 가리기·스티커 overlays; their sizes are checked against the video in overlayFiles.
+    'gif:create': { count: 3, lock: true, valid: args => validAssetId(args[0]) && validGifOptions(args[1]) && (args[2] === null || validOverlayRequest(args[2])), run: (id, options, overlays) => createGif(id as string, options as GifOptions, overlays as VideoOverlayRequest | null) },
+    'video:export-mp4': { count: 3, lock: true, valid: args => validAssetId(args[0]) && validMp4Options(args[1]) && (args[2] === null || validOverlayRequest(args[2])), run: (id, options, overlays) => exportMp4(id as string, options as Mp4Options, overlays as VideoOverlayRequest | null) },
     'gif:cancel': { count: 0, run: cancelGif }
   }
   for (const [channel, action] of Object.entries(gifActions)) {
@@ -514,7 +540,8 @@ app.whenReady().then(() => {
       return { ...(await library.importFiles(pngs)), rejected }
     },
     'library:use': async id => {
-      if (!photos.list().length) throw new Error('사진을 먼저 열어주세요.')
+      // Stickers go on an open photo or, in the 동영상 mode, on an opened video.
+      if (!photos.list().length && !videos.size) throw new Error('사진이나 동영상을 먼저 열어주세요.')
       const bytes = await library.read(id as string)
       const asset = library.list().find(item => item.id === id)!
       const result: ImageAsset = { id: asset.id, name: asset.name, width: asset.width, height: asset.height, mime: 'image/png', bytes }

@@ -1,12 +1,25 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type ComponentProps, type KeyboardEvent, type PointerEvent } from 'react'
 import { loadPref, savePref } from './remember'
 import { DEFAULT_GIF, GIF_FPS, GIF_WIDTHS, MAX_GIF_SECONDS, gifFrameCount, validGifOptions, type GifReceipt, type ToolStatus, type VideoCrop, type VideoRef } from '../shared/gif'
 import { DEFAULT_MP4, MAX_MP4_SECONDS, MP4_WIDTHS, mp4Width, validMp4Options } from '../shared/video'
 import { CROP_LABELS, aspectRatio, centeredCrop, type CropRect } from '../shared/crop'
 import type { VideoColor } from '../shared/hdr'
 import { VideoCropBox } from './VideoCropBox'
+import { EditorCanvas } from './EditorCanvas'
+import { LibraryPanel } from './LibraryPanel'
+import { addInstance, addRegion, clearRegions, commitScene, emptyHistory, redoScene, removeSelected, undoScene, updateSelected, updateSelectedRegion, type Scene, type SceneHistory } from '../shared/scene'
+import { validPlacement, type Placement, type RegionShape, type RegionStyle } from '../shared/model'
+import { MAX_VIDEO_REGIONS } from '../shared/video-overlay'
+import { drawOverlayPreview, overlayRequest } from './video-overlay'
 
-interface Loaded { id: string; name: string; duration: number; width: number; height: number; hasAudio: boolean; color: VideoColor; previewFps: number; urls: string[] }
+interface Loaded { id: string; name: string; duration: number; width: number; height: number; hasAudio: boolean; color: VideoColor; previewFps: number; urls: string[]; blobs: Blob[]; frame: { width: number; height: number } }
+type Panel = 'save' | 'hide' | 'sticker'
+interface RegionEffect { shape: RegionShape; style: RegionStyle; strength: number }
+const DEFAULT_EFFECT: RegionEffect = { shape: 'ellipse', style: 'mosaic', strength: 50 }
+const validEffect = (value: unknown): value is RegionEffect => !!value && typeof value === 'object' && ['ellipse', 'rect'].includes((value as RegionEffect).shape)
+  && ['blur', 'mosaic'].includes((value as RegionEffect).style) && Number.isInteger((value as RegionEffect).strength) && (value as RegionEffect).strength >= 1 && (value as RegionEffect).strength <= 100
+/** A sticker from the library, decoded once (src.tsx shares its cache with the photo editor). */
+export interface VideoSticker { id: string; width: number; height: number; bitmap: ImageBitmap }
 type Format = 'gif' | 'mp4'
 /** 자르기 choices; 'none' keeps the whole frame. */
 const VIDEO_ASPECTS = ['none', 'free', '16:9', '4:3', '1:1', '3:4', '9:16'] as const
@@ -25,13 +38,16 @@ interface Props {
   onBusyChange(busy: boolean): void
   /** False while the photo editor is shown; playback pauses. */
   active: boolean
+  /** The photo editor's sticker library (pick mode); using a sticker places it on the video instead. */
+  library: Omit<ComponentProps<typeof LibraryPanel>, 'mode' | 'onUse' | 'canUse' | 'onManage'>
+  loadSticker(id: string): Promise<VideoSticker>
 }
 const MIN_SPAN = 0.1
 const round = (value: number) => Math.round(value * 1000) / 1000
 const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent)
 const formatBytes = (bytes: number) => bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)}MB` : `${Math.max(1, Math.round(bytes / 1024))}KB`
 
-export function GifMaker({ incoming, outputFolder, onSaved, onStatus, onError, onBusyChange, active }: Props) {
+export function GifMaker({ incoming, outputFolder, onSaved, onStatus, onError, onBusyChange, active, library, loadSticker }: Props) {
   const api = window.photokkumi
   const [tool, setTool] = useState<ToolStatus | null>(null)
   const [video, setVideo] = useState<Loaded | null>(null)
@@ -48,6 +64,14 @@ export function GifMaker({ incoming, outputFolder, onSaved, onStatus, onError, o
   const [aspect, setAspect] = useState<VideoAspect>('none')
   const [crop, setCrop] = useState<CropRect | null>(null)
   const [progress, setProgress] = useState(0)
+  // 가리기·스티커: the same Scene model as a photo, in preview-frame pixels (see video-overlay.ts).
+  const [panel, setPanel] = useState<Panel>('save')
+  const [overlay, setOverlay] = useState<SceneHistory>(emptyHistory)
+  const [effect, setEffect] = useState<RegionEffect>(() => loadPref('pk.videoRegion', DEFAULT_EFFECT, validEffect))
+  const [frameBitmap, setFrameBitmap] = useState<ImageBitmap | null>(null)
+  const assets = useRef(new Map<string, VideoSticker>())
+  const liveBase = useRef<SceneHistory | null>(null)
+  const previewCanvas = useRef<HTMLCanvasElement>(null)
   const root = useRef<HTMLDivElement>(null)
   const track = useRef<HTMLDivElement>(null)
   const busy = work !== null
@@ -67,13 +91,34 @@ export function GifMaker({ incoming, outputFolder, onSaved, onStatus, onError, o
   useEffect(() => { if (incoming) setPending(incoming.ref) }, [incoming])
   useEffect(() => api.onGifProgress(setProgress), [api])
   useEffect(() => () => { setVideo(current => { current?.urls.forEach(url => URL.revokeObjectURL(url)); return null }) }, [])
+  const scene = overlay.present
+  const placed = scene.regions.length + scene.stickers.length
+  // The current preview frame as a bitmap, only while items are edited or placed (blur patches are built from it).
+  const frameIndex = video ? Math.min(video.urls.length - 1, Math.max(0, Math.floor(playhead * video.previewFps))) : 0
+  const needFrame = !!video && (panel !== 'save' || placed > 0)
+  useEffect(() => {
+    if (!needFrame || !video) { setFrameBitmap(null); return }
+    let cancelled = false
+    void createImageBitmap(video.blobs[frameIndex]).then(bitmap => { if (cancelled) bitmap.close(); else setFrameBitmap(bitmap) }, () => undefined)
+    return () => { cancelled = true }
+  }, [needFrame, video, frameIndex])
+  // Close the previous frame once React has moved on to the next one.
+  useEffect(() => () => frameBitmap?.close(), [frameBitmap])
+  useEffect(() => {
+    const canvas = previewCanvas.current
+    if (canvas && frameBitmap && panel === 'save') drawOverlayPreview(canvas, frameBitmap, scene, assets.current)
+  }, [frameBitmap, scene, panel])
 
   const load = useCallback((ref: VideoRef) => act('load', async () => {
     setPlaying(false)
     onStatus(`${ref.name} · 미리보기를 만드는 중…`)
     const info = unwrap(await api.loadVideo(ref.id))
-    const urls = info.frames.map(bytes => URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' })))
-    setVideo(previous => { previous?.urls.forEach(url => URL.revokeObjectURL(url)); return { ...info, urls } })
+    const blobs = info.frames.map(bytes => new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' }))
+    const first = await createImageBitmap(blobs[0]), frame = { width: first.width, height: first.height }
+    first.close()
+    const urls = blobs.map(blob => URL.createObjectURL(blob))
+    setVideo(previous => { previous?.urls.forEach(url => URL.revokeObjectURL(url)); return { ...info, frames: [], urls, blobs, frame } })
+    setOverlay(emptyHistory()); setPanel('save')
     // A GIF is usually a short moment; an MP4 is usually the whole clip minus the edges.
     const end = round(Math.min(info.duration, format === 'gif' ? 3 : MAX_MP4_SECONDS))
     setRange({ start: 0, end }); setPlayhead(0)
@@ -153,7 +198,6 @@ export function GifMaker({ incoming, outputFolder, onSaved, onStatus, onError, o
     setFormat(next); savePref('pk.videoFormat', next)
     if (range.end - range.start > LIMIT[next]) setRange(current => ({ start: current.start, end: round(current.start + LIMIT[next]) }))
   }
-  const frameIndex = Math.min(video.urls.length - 1, Math.max(0, Math.floor(playhead * video.previewFps)))
   const percent = (time: number) => `${time / video.duration * 100}%`
   const thumbs = Array.from({ length: 12 }, (_, index) => video.urls[Math.round(index * (video.urls.length - 1) / 11)])
 
@@ -183,7 +227,15 @@ export function GifMaker({ incoming, outputFolder, onSaved, onStatus, onError, o
   }
   function handleKey(event: KeyboardEvent<HTMLDivElement>) {
     const target = event.target as HTMLElement
-    if (busy || event.ctrlKey || event.metaKey || event.altKey || target.closest('input, select, textarea')) return
+    if (busy || event.altKey || target.closest('input, select, textarea')) return
+    if (panel !== 'save' && (event.ctrlKey || event.metaKey)) {
+      const key = event.key.toLowerCase()
+      if (key === 'z' || key === 'y') { event.preventDefault(); if (key === 'y' || event.shiftKey) redo(); else undo() }
+      return
+    }
+    if (event.ctrlKey || event.metaKey) return
+    if (panel !== 'save' && (event.key === 'Delete' || event.key === 'Backspace') && scene.selectedId) { event.preventDefault(); remove(); return }
+    if (panel !== 'save' && event.key === 'Escape' && scene.selectedId) { event.preventDefault(); select(null); return }
     const step = event.shiftKey ? 1 : 1 / video!.previewFps
     const actions: Record<string, () => void> = {
       '[': () => setBoundary('start', playhead), ']': () => setBoundary('end', playhead),
@@ -196,11 +248,45 @@ export function GifMaker({ incoming, outputFolder, onSaved, onStatus, onError, o
     if (!action || (event.key === ' ' && target.tagName === 'BUTTON')) return
     event.preventDefault(); action()
   }
+  // 가리기·스티커 editing: one undo step per drag/handle change, slider changes become one step on release.
+  const edit = (next: Scene) => { liveBase.current = null; setOverlay(history => commitScene(history, next)) }
+  const select = (id: string | null) => setOverlay(history => ({ ...history, present: { ...history.present, selectedId: id } }))
+  const selectedRegion = scene.regions.find(item => item.id === scene.selectedId) ?? null
+  function changeItem(id: string, value: Placement) { if (validPlacement(value)) edit(updateSelected({ ...scene, selectedId: id }, value)) }
+  function drawRegion(value: Placement) {
+    if (scene.regions.length >= MAX_VIDEO_REGIONS) { onError(`동영상에는 가림 영역을 ${MAX_VIDEO_REGIONS}개까지 넣을 수 있습니다.`); return }
+    edit(addRegion(scene, { id: crypto.randomUUID(), ...value, ...effect }))
+  }
+  function changeEffect(next: RegionEffect, live = false) {
+    if (!validEffect(next)) return
+    setEffect(next); savePref('pk.videoRegion', next)
+    if (!selectedRegion) return
+    if (!live) { edit(updateSelectedRegion(liveBase.current?.present ?? scene, next)); return }
+    setOverlay(history => { liveBase.current ??= history; return { ...history, present: updateSelectedRegion(history.present, next) } })
+  }
+  function commitLive() {
+    const base = liveBase.current
+    if (!base) return
+    liveBase.current = null
+    setOverlay(history => commitScene(base, history.present))
+  }
+  const addSticker = (id: string) => act('tool', async () => {
+    const sticker = assets.current.get(id) ?? await loadSticker(id)
+    assets.current.set(id, sticker)
+    const frame = video.frame, width = Math.min(sticker.width, frame.width / 3)
+    const offset = Math.min((scene.stickers.length % 10) * 12, frame.width / 8)
+    edit(addInstance(scene, { id: crypto.randomUUID(), assetId: id, x: frame.width / 2 + offset, y: frame.height / 2 + offset, width, height: width * sticker.height / sticker.width, rotation: 0, zOrder: 0 }))
+    onStatus('스티커를 올렸습니다. 끌어서 옮기고 핸들로 크기·회전을 바꾸세요. 영상 전체 구간에 그대로 보입니다.')
+  })
+  const undo = () => { liveBase.current = null; setOverlay(undoScene) }
+  const redo = () => { liveBase.current = null; setOverlay(redoScene) }
+  const remove = () => { if (scene.selectedId) edit(removeSelected(scene)) }
   const label = format === 'gif' ? 'GIF' : 'MP4'
   const create = () => act('create', async () => {
     setPlaying(false); setProgress(0)
     onStatus(`${label}를 만드는 중…`)
-    const receipt = unwrap(format === 'gif' ? await api.createGif(video.id, gifOptions) : await api.exportMp4(video.id, mp4Options))
+    const overlays = await overlayRequest(scene, video.frame, video, assets.current)
+    const receipt = unwrap(format === 'gif' ? await api.createGif(video.id, gifOptions, overlays) : await api.exportMp4(video.id, mp4Options, overlays))
     if (!receipt) { onStatus('저장이 취소되었습니다.'); return }
     onSaved(receipt)
     onStatus(`${label} 저장 완료 · ${receipt.name} · ${formatBytes(receipt.bytes)}`)
@@ -208,11 +294,16 @@ export function GifMaker({ incoming, outputFolder, onSaved, onStatus, onError, o
 
   return <div className="gif-workspace" ref={root} tabIndex={-1} onKeyDown={handleKey} aria-label="동영상 편집">
     <div className="gif-main">
-      <div className="gif-preview">
+      {panel === 'save' ? <div className="gif-preview">
         <VideoCropBox video={video} crop={crop} ratio={ratio} disabled={busy} onChange={setCrop}>
           <img src={video.urls[frameIndex]} alt={`${video.name} 미리보기`} data-testid="gif-frame" data-index={frameIndex} />
+          {placed > 0 && <canvas ref={previewCanvas} className="video-overlay-preview" data-testid="video-overlay-preview" aria-hidden="true" />}
         </VideoCropBox>
-      </div>
+      </div> : frameBitmap ? <EditorCanvas key={video.id} photo={{ width: video.frame.width, height: video.frame.height, bitmap: frameBitmap }} assets={assets.current} scene={scene}
+        disabled={busy} drawMode={panel === 'hide'} drawShape={effect.shape} onDraw={drawRegion} onSelect={select} onChange={changeItem}
+        selectionTools={<button disabled={busy} onClick={remove} aria-label="선택 항목 삭제" title="Delete">🗑 삭제</button>}
+        info={<>{panel === 'hide' ? '영상 위를 끌어서 가릴 곳을 그리세요' : '스티커를 끌어서 옮기세요'} · 영상 전체 구간에 적용</>} />
+        : <div className="gif-preview"><p className="hint">프레임을 준비하는 중…</p></div>}
       <div className="gif-timeline">
         <button className="icon" aria-label={playing ? '일시 정지' : '구간 재생'} title="Space" disabled={busy} onClick={() => setPlaying(value => !value)}>{playing ? '❚❚' : '▶'}</button>
         <div className="gif-track" ref={track} data-testid="gif-track" onPointerDown={dragHandle('head')}>
@@ -231,6 +322,39 @@ export function GifMaker({ incoming, outputFolder, onSaved, onStatus, onError, o
     <aside className="gif-side" aria-label="동영상 설정">
       <div className="pane-heading"><h2 title={video.name}>{video.name}</h2><button disabled={busy} onClick={openVideo}>다른 동영상</button></div>
       <p className="hint">{video.duration.toFixed(1)}초 · {video.width} × {video.height}{video.color !== 'sdr' ? ' · HDR' : ''}{video.hasAudio ? '' : ' · 소리 없음'}</p>
+      <div className="side-tabs" role="tablist" aria-label="동영상 패널">
+        <button role="tab" aria-selected={panel === 'save'} disabled={busy} onClick={() => { setPanel('save'); select(null) }}>저장</button>
+        <button role="tab" aria-selected={panel === 'hide'} disabled={busy} onClick={() => { setPanel('hide'); select(null) }}>가리기{!!scene.regions.length && <span className="tab-count">{scene.regions.length}</span>}</button>
+        <button role="tab" aria-selected={panel === 'sticker'} disabled={busy} onClick={() => { setPanel('sticker'); select(null) }}>스티커{!!scene.stickers.length && <span className="tab-count">{scene.stickers.length}</span>}</button>
+      </div>
+      {panel === 'hide' && <section className="region-panel video-region-panel" aria-label="동영상 가리기">
+        <div className="region-fields" role="group" aria-label="가림 효과">
+          <div className="field-row"><span>모양</span><div className="segmented" role="radiogroup" aria-label="가림 모양">
+            {(['ellipse', 'rect'] as RegionShape[]).map(shape => <button key={shape} role="radio" aria-checked={effect.shape === shape} disabled={busy}
+              onClick={() => changeEffect({ ...effect, shape })}>{shape === 'ellipse' ? '◯ 원형' : '▭ 사각형'}</button>)}
+          </div></div>
+          <div className="field-row"><span>방식</span><div className="segmented" role="radiogroup" aria-label="가림 방식">
+            {(['blur', 'mosaic'] as RegionStyle[]).map(style => <button key={style} role="radio" aria-checked={effect.style === style} disabled={busy}
+              onClick={() => changeEffect({ ...effect, style })}>{style === 'blur' ? '블러' : '모자이크'}</button>)}
+          </div></div>
+          <label>강도
+            <input type="range" aria-label="가림 강도 슬라이더" min="1" max="100" step="1" disabled={busy} value={effect.strength}
+              onChange={e => changeEffect({ ...effect, strength: e.target.valueAsNumber }, true)} onPointerUp={commitLive} onKeyUp={commitLive} onBlur={commitLive} />
+            <input type="number" aria-label="가림 강도" min="1" max="100" step="1" disabled={busy} value={effect.strength}
+              onChange={e => changeEffect({ ...effect, strength: e.target.valueAsNumber })} />
+          </label>
+          <p className="hint">{selectedRegion ? '선택한 영역에 적용됩니다.' : '영상 위를 끌어서 그리면 이 효과로 가립니다.'} 번호판·간판처럼 <b>자리가 고정된 것</b>을 가릴 때 쓰세요.</p>
+        </div>
+        <div className="pane-heading">
+          <h2>가림 <small><span data-testid="video-region-count">{scene.regions.length}</span>/{MAX_VIDEO_REGIONS}</small></h2>
+          <button className="link" disabled={busy || !scene.regions.length} onClick={() => edit(clearRegions(scene))}>모두 지우기</button>
+        </div>
+      </section>}
+      {panel === 'sticker' && <div className="library-pane video-library">
+        <LibraryPanel {...library} mode="pick" canUse disabled={library.disabled || busy} onUse={id => { void addSticker(id) }} />
+      </div>}
+      {panel === 'save' && <>
+      {placed > 0 && <p className="hint" data-testid="video-placed">가림 {scene.regions.length}개 · 스티커 {scene.stickers.length}개를 영상 전체에 넣어 저장합니다.</p>}
       <div className="segmented" role="radiogroup" aria-label="저장 형식">
         {(['gif', 'mp4'] as Format[]).map(item => <button key={item} role="radio" aria-checked={format === item} disabled={busy} onClick={() => chooseFormat(item)}>
           {item === 'gif' ? 'GIF · 움짤' : 'MP4 · 동영상'}</button>)}
@@ -260,6 +384,7 @@ export function GifMaker({ incoming, outputFolder, onSaved, onStatus, onError, o
       {format === 'gif' && span > 10 && <p className="hint">10초가 넘으면 GIF 용량이 커집니다. 너비나 FPS를 낮춰 보세요.</p>}
       {video.color !== 'sdr' && <p className="hint">HDR 영상입니다. 색이 바래지 않도록 일반 화면 색(SDR)으로 바꿔 저장합니다.</p>}
       {!valid && <p role="alert">{format === 'gif' ? `구간은 0.1~${MAX_GIF_SECONDS}초, 프레임은 600개 이하여야 합니다.` : `구간은 0.1초~${formatSeconds(MAX_MP4_SECONDS)}여야 합니다.`}</p>}
+      </>}
       <div className="gif-footer">
       <div className="gif-output">
         <span>출력 폴더</span>

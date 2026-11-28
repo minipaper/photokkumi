@@ -1,5 +1,6 @@
 /** GIF export options and ffmpeg argument building. Times are seconds in the source video. */
 import { parseColor, toneMapFilter, type VideoColor } from './hdr'
+import { overlayGraph, overlayInputs, type OverlayFiles } from './video-overlay'
 /** Part of the video to keep, in display pixels (rotation applied); see video.ts. */
 export interface VideoCrop { x: number; y: number; width: number; height: number }
 export interface GifOptions { start: number; end: number; width: number; fps: number; crop?: VideoCrop }
@@ -51,19 +52,33 @@ export function previewFps(duration: number) { return Math.max(0.2, Math.min(10,
 
 const seconds = (value: number) => value.toFixed(3)
 /** The video as the app sees it: display size (rotation applied) and colour curve. */
-export interface VideoSource { width: number; color: VideoColor }
+export interface VideoSource { width: number; height: number; color: VideoColor }
 /** Joins filters, skipping empty ones (no tone mapping for SDR). */
 export const chain = (...filters: string[]) => filters.filter(Boolean).join(',')
 export function previewArgs(input: string, fps: number, color: VideoColor = 'sdr'): string[] {
   return ['-hide_banner', '-nostdin', '-loglevel', 'error', '-i', input, '-an', '-sn', '-dn',
     '-vf', chain(`fps=${fps},scale=640:-2`, toneMapFilter(color)), '-frames:v', String(MAX_PREVIEW_FRAMES), '-q:v', '6', '-f', 'image2pipe', '-c:v', 'mjpeg', 'pipe:1']
 }
-export function gifArgs(input: string, output: string, options: GifOptions, source: VideoSource): string[] {
+/**
+ * The frame part of the filter graph, from [0:v] to the end of a chain the caller continues (`…,split` or `…[vout]`).
+ * Without overlays: crop → frame rate → scale → HDR→SDR → tail (cheapest: tone mapping runs on the small frames).
+ * With overlays they are placed in full-size display pixels, after tone mapping (stickers are SDR), before the crop.
+ */
+export function frameGraph(source: VideoSource, crop: VideoCrop | undefined, rate: string[], scale: string, tail: string[], overlays?: OverlayFiles) {
+  if (!overlays) return { graph: `[0:v]${chain(...cropFilter(crop), ...rate, scale, toneMapFilter(source.color), ...tail)}`, inputs: [] as string[] }
+  const inputs = overlayInputs(overlays)
+  return {
+    graph: `[0:v]${chain(...rate, toneMapFilter(source.color), 'format=rgb24')}[ov_0];${overlayGraph(overlays.regions, source, inputs, 'ov_0', 'ov_out')};[ov_out]${chain(...cropFilter(crop), scale, ...tail)}`,
+    inputs: inputs.args
+  }
+}
+export function gifArgs(input: string, output: string, options: GifOptions, source: VideoSource, overlays?: OverlayFiles): string[] {
   const width = Math.min(options.width, croppedWidth(options.crop, source.width))
   // Two-pass palette in one graph keeps colours far better than ffmpeg's default GIF palette.
-  const graph = `[0:v]${chain(...cropFilter(options.crop), `fps=${options.fps}`, `scale=${width}:-1:flags=lanczos`, toneMapFilter(source.color), 'format=rgb24')},split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle`
+  const frames = frameGraph(source, options.crop, [`fps=${options.fps}`], `scale=${width}:-1:flags=lanczos`, ['format=rgb24'], overlays)
+  const graph = `${frames.graph},split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle`
   return ['-hide_banner', '-nostdin', '-loglevel', 'error', '-progress', 'pipe:1', '-ss', seconds(options.start), '-t', seconds(options.end - options.start),
-    '-i', input, '-an', '-sn', '-dn', '-filter_complex', graph, '-frames:v', String(gifFrameCount(options)), '-loop', '0', '-f', 'gif', '-y', output]
+    '-i', input, ...frames.inputs, '-an', '-sn', '-dn', '-filter_complex', graph, '-frames:v', String(gifFrameCount(options)), '-loop', '0', '-f', 'gif', '-y', output]
 }
 /** Reads duration, display size (rotation applied) from `ffmpeg -i` stderr. */
 export function parseProbe(stderr: string): { duration: number; width: number; height: number; hasAudio: boolean; color: VideoColor } {

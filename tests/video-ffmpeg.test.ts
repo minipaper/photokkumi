@@ -6,6 +6,9 @@ import { join } from 'node:path'
 import { chain, gifArgs, parseProbe } from '../src/shared/gif'
 import { parseColor, toneMapFilter, type VideoColor } from '../src/shared/hdr'
 import { mp4Args, pickH264Encoder } from '../src/shared/video'
+import { maskBounds, type VideoRegion } from '../src/shared/video-overlay'
+import { PNG } from 'pngjs'
+import { writeFile } from 'node:fs/promises'
 
 /** Runs against the developer's own ffmpeg; skipped where none is installed (the Windows CI runner). */
 function findFfmpeg() {
@@ -76,7 +79,7 @@ describe.skipIf(!ffmpeg)('실제 ffmpeg로 동영상 색·자르기·소리 확�
       expect(distance(bars(clip, '')[0], COLOURS[0])).toBeGreaterThan(20)
       // The whole GIF graph parses and keeps the colour.
       const gif = join(dir, 'o.gif')
-      exec(gifArgs(clip, gif, { start: 0, end: 1, width: 320, fps: 5 }, { width: WIDTH, color }))
+      exec(gifArgs(clip, gif, { start: 0, end: 1, width: 320, fps: 5 }, { width: WIDTH, height: HEIGHT, color }))
       expect(distance(bars(gif, '')[0], COLOURS[0])).toBeLessThanOrEqual(10)
     } finally { await rm(dir, { recursive: true, force: true }) }
   }, 30_000)
@@ -94,7 +97,7 @@ describe.skipIf(!ffmpeg)('실제 ffmpeg로 동영상 색·자르기·소리 확�
       const crop = { x: 300, y: 0, width: 600, height: 200 }
       for (const audio of [true, false]) {
         const out = join(dir, `${audio}.mp4`)
-        exec(mp4Args(clip, out, { start: 0.5, end: 1.5, width: 0, audio, crop }, { width: 900, color: 'sdr' }, encoder))
+        exec(mp4Args(clip, out, { start: 0.5, end: 1.5, width: 0, audio, crop }, { width: 900, height: 200, color: 'sdr' }, encoder))
         const info = probe(out)
         expect(parseProbe(info)).toMatchObject({ width: 600, height: 200, hasAudio: audio })
         expect(info).toMatch(/bt709/); expect(info).not.toContain('location')
@@ -102,6 +105,42 @@ describe.skipIf(!ffmpeg)('실제 ffmpeg로 동영상 색·자르기·소리 확�
         expect((await readFile(out)).subarray(4, 8).toString('latin1')).toBe('ftyp')
         const [left] = bars(out, 'scale=320:64')
         expect(left[2]).toBeGreaterThan(200); expect(left[0]).toBeLessThan(40)
+      }
+    } finally { await rm(dir, { recursive: true, force: true }) }
+  }, 60_000)
+
+  it('가림·스티커: 2px 줄무늬 영상의 타원 안만 평평해지고, 스티커는 마지막 프레임까지 그대로', async () => {
+    const encoder = pickH264Encoder(spawnSync(ffmpeg!, ['-hide_banner', '-encoders'], { encoding: 'utf8' }).stdout)
+    if (!encoder) return
+    const dir = await mkdtemp(join(tmpdir(), 'pk-ov-'))
+    try {
+      const clip = join(dir, 'clip.mp4'), video = { width: 320, height: 240 }
+      // Black/white 2px vertical stripes for 2s: any blur turns them grey.
+      run(['-f', 'lavfi', '-i', 'color=c=white:s=320x240:r=10:d=2,geq=lum=\'if(mod(floor(X/2),2),235,16)\':cb=128:cr=128', '-c:v', 'libx264', '-crf', '0', '-pix_fmt', 'yuv444p', '-y', clip])
+      const region: VideoRegion = { x: 100, y: 120, width: 120, height: 80, rotation: 0, style: 'blur', strength: 30, shape: 'ellipse' }
+      const bounds = maskBounds(region, video)
+      const mask = new PNG({ width: bounds.width, height: bounds.height })
+      for (let y = 0; y < bounds.height; y++) for (let x = 0; x < bounds.width; x++) {
+        const inside = ((x + 0.5 + bounds.x - region.x) / 60) ** 2 + ((y + 0.5 + bounds.y - region.y) / 40) ** 2 <= 1
+        mask.data.set(inside ? [255, 255, 255, 255] : [0, 0, 0, 255], (y * bounds.width + x) * 4)
+      }
+      const layer = new PNG({ width: 320, height: 240 })
+      for (let y = 20; y < 60; y++) for (let x = 240; x < 300; x++) layer.data.set([220, 20, 40, 255], (y * 320 + x) * 4)
+      const files = { regions: [region], layer: join(dir, 'layer 100%d.png'), masks: [join(dir, 'mask.png')] }
+      await writeFile(files.layer, PNG.sync.write(layer)); await writeFile(files.masks[0], PNG.sync.write(mask))
+      const out = join(dir, 'o.mp4')
+      exec(mp4Args(clip, out, { start: 0, end: 2, width: 0, audio: false }, { ...video, color: 'sdr' }, encoder, files))
+      const frame = (time: number) => run(['-ss', String(time), '-i', out, '-frames:v', '1', '-vf', 'format=gray', '-f', 'rawvideo', 'pipe:1'])
+      for (const time of [0, 1.8]) {
+        const gray = frame(time), at = (x: number, y: number) => gray[y * 320 + x]
+        const inside = [96, 97, 98, 99, 100, 101].map(x => at(x, 120)), outside = [10, 11, 12, 13].map(x => at(x, 120))
+        expect(Math.max(...inside) - Math.min(...inside), `${time}s inside ${inside}`).toBeLessThan(30)
+        expect(Math.max(...outside) - Math.min(...outside), `${time}s outside ${outside}`).toBeGreaterThan(150)
+        // Corner of the bounds outside the ellipse keeps the stripes.
+        const corner = [0, 1, 2, 3].map(x => at(bounds.x + 1 + x, bounds.y + 1))
+        expect(Math.max(...corner) - Math.min(...corner), `${time}s corner ${corner}`).toBeGreaterThan(150)
+        const red = run(['-ss', String(time), '-i', out, '-frames:v', '1', '-vf', 'crop=2:2:270:40,scale=1:1,format=rgb24', '-f', 'rawvideo', 'pipe:1'])
+        expect(red[0]).toBeGreaterThan(180); expect(red[1]).toBeLessThan(60)
       }
     } finally { await rm(dir, { recursive: true, force: true }) }
   }, 60_000)

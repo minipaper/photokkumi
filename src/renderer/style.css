@@ -500,3 +500,8 @@ dialog.maker-batch { width: min(440px, 92vw); }
 .gif-fields label.check input { width: auto; }
 /* Short windows (down to the 580px minimum): drop the footer note so the settings never scroll. */
 @media (max-height: 660px) { .gif-footer > .hint { display: none; } }
+/* 동영상 가리기·스티커: the read-only preview canvas sits on the frame; editing uses the photo editor's canvas. */
+.gif-frame-box .video-overlay-preview { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.gif-main > .canvas-editor { flex: 1; min-height: 0; }
+.gif-side .video-library { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.gif-side .video-library .library { flex: 1; min-height: 0; }

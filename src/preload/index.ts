@@ -60,6 +60,7 @@ const api: PhotoApi = {
   openVideo: () => ipcRenderer.invoke('gif:open-video'),
   loadVideo: id => ipcRenderer.invoke('gif:load-video', id),
   createGif: (id, options) => ipcRenderer.invoke('gif:create', id, options),
+  exportMp4: (id, options) => ipcRenderer.invoke('video:export-mp4', id, options),
   cancelGif: () => ipcRenderer.invoke('gif:cancel'),
   onGifProgress: callback => {
     const listener = (_event: unknown, ratio: unknown) => { if (typeof ratio === 'number' && ratio >= 0 && ratio <= 1) callback(ratio) }

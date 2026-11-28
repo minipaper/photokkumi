@@ -4,6 +4,7 @@ import { basename, extname, isAbsolute, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { readBounded } from './library'
 import { VIDEO_EXTENSIONS, type ToolStatus, type VideoRef } from '../shared/gif'
+import type { VideoColor } from '../shared/hdr'
 
 /**
  * ffmpeg is NOT bundled. The user installs it; we only find and launch it as a separate process,
@@ -101,17 +102,17 @@ export class ToolStore {
     return this.status()
   }
   require(): string {
-    if (!this.resolved) throw new Error('ffmpeg를 찾을 수 없습니다. GIF 만들기 화면의 안내에 따라 설치하거나 위치를 지정하세요.')
+    if (!this.resolved) throw new Error('ffmpeg를 찾을 수 없습니다. 동영상 화면의 안내에 따라 설치하거나 위치를 지정하세요.')
     return this.resolved.path
   }
 }
 
 export const MAX_VIDEO_BYTES = 4 * 1024 ** 3
 export class VideoStore {
-  private records = new Map<string, { ref: VideoRef; path: string; width?: number; duration?: number }>()
+  private records = new Map<string, { ref: VideoRef; path: string; width?: number; height?: number; duration?: number; hasAudio?: boolean; color?: VideoColor }>()
   /** Registers a user-chosen video; only regular files with a known extension and bounded size. */
   async add(input: string): Promise<VideoRef> {
-    if (!isAbsolute(input) || !VIDEO_EXTENSIONS.includes(extname(input).toLowerCase())) throw new Error('MOV·MP4 동영상만 GIF로 만들 수 있습니다.')
+    if (!isAbsolute(input) || !VIDEO_EXTENSIONS.includes(extname(input).toLowerCase())) throw new Error('MOV·MP4 동영상만 열 수 있습니다.')
     const info = await fs.lstat(input)
     if (!info.isFile()) throw new Error('동영상 파일을 확인할 수 없습니다.')
     if (info.size > MAX_VIDEO_BYTES) throw new Error('동영상은 4GB 이하만 열 수 있습니다.')

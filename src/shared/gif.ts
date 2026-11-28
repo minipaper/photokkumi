@@ -1,7 +1,10 @@
 /** GIF export options and ffmpeg argument building. Times are seconds in the source video. */
-export interface GifOptions { start: number; end: number; width: number; fps: number }
+import { parseColor, toneMapFilter, type VideoColor } from './hdr'
+/** Part of the video to keep, in display pixels (rotation applied); see video.ts. */
+export interface VideoCrop { x: number; y: number; width: number; height: number }
+export interface GifOptions { start: number; end: number; width: number; fps: number; crop?: VideoCrop }
 export interface VideoRef { id: string; name: string }
-export interface VideoInfo extends VideoRef { duration: number; width: number; height: number; previewFps: number; frames: Uint8Array[] }
+export interface VideoInfo extends VideoRef { duration: number; width: number; height: number; hasAudio: boolean; color: VideoColor; previewFps: number; frames: Uint8Array[] }
 export interface GifReceipt { name: string; folderLabel: string; bytes: number }
 export interface ToolStatus { found: boolean; path: string | null; version: string | null }
 export const GIF_WIDTHS = [320, 480, 640, 800] as const
@@ -16,29 +19,54 @@ export function gifFrameCount(options: Pick<GifOptions, 'start' | 'end' | 'fps'>
 export function validGifOptions(value: unknown, duration = Infinity): value is GifOptions {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const item = value as Record<string, unknown>
-  if (Object.keys(item).length !== 4 || ![item.start, item.end, item.width, item.fps].every(v => typeof v === 'number' && Number.isFinite(v))) return false
+  const keys = Object.keys(item)
+  if (!(keys.length === 4 || (keys.length === 5 && 'crop' in item && validCropShape(item.crop)))
+    || ![item.start, item.end, item.width, item.fps].every(v => typeof v === 'number' && Number.isFinite(v))) return false
   const options = item as unknown as GifOptions
   return options.start >= 0 && options.end <= duration + 0.05 && options.end - options.start >= 0.1 && options.end - options.start <= MAX_GIF_SECONDS
     && (GIF_WIDTHS as readonly number[]).includes(options.width) && (GIF_FPS as readonly number[]).includes(options.fps)
     && gifFrameCount(options) <= MAX_GIF_FRAMES
 }
+/** Crop shape only (four non-negative integers, at least 16px); main checks it against the video size. */
+export function validCropShape(value: unknown): value is VideoCrop {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== 4) return false
+  const crop = value as Record<string, unknown>
+  return ['x', 'y', 'width', 'height'].every(key => Number.isInteger(crop[key]) && (crop[key] as number) >= 0)
+    && (crop.width as number) >= 16 && (crop.height as number) >= 16
+}
+/** The crop fits the video (display pixels). */
+export function cropFits(crop: VideoCrop | undefined, video: { width: number; height: number }) {
+  return !crop || (crop.x + crop.width <= video.width && crop.y + crop.height <= video.height)
+}
+/** ffmpeg crop filter with even numbers (H.264's 4:2:0 needs them; GIF does not care). */
+export function cropFilter(crop: VideoCrop | undefined): string[] {
+  if (!crop) return []
+  const even = (value: number) => Math.floor(value / 2) * 2
+  return [`crop=${even(crop.width)}:${even(crop.height)}:${even(crop.x)}:${even(crop.y)}`]
+}
+/** Width after cropping (display pixels): the crop, or the whole video. */
+export const croppedWidth = (crop: VideoCrop | undefined, videoWidth: number) => crop ? Math.floor(crop.width / 2) * 2 : videoWidth
 /** Preview sampling rate: up to 10 fps, fewer for long clips so at most MAX_PREVIEW_FRAMES are decoded. */
 export function previewFps(duration: number) { return Math.max(0.2, Math.min(10, Math.floor(MAX_PREVIEW_FRAMES / Math.max(duration, 0.1) * 10) / 10)) }
 
 const seconds = (value: number) => value.toFixed(3)
-export function previewArgs(input: string, fps: number): string[] {
+/** The video as the app sees it: display size (rotation applied) and colour curve. */
+export interface VideoSource { width: number; color: VideoColor }
+/** Joins filters, skipping empty ones (no tone mapping for SDR). */
+export const chain = (...filters: string[]) => filters.filter(Boolean).join(',')
+export function previewArgs(input: string, fps: number, color: VideoColor = 'sdr'): string[] {
   return ['-hide_banner', '-nostdin', '-loglevel', 'error', '-i', input, '-an', '-sn', '-dn',
-    '-vf', `fps=${fps},scale=640:-2`, '-frames:v', String(MAX_PREVIEW_FRAMES), '-q:v', '6', '-f', 'image2pipe', '-c:v', 'mjpeg', 'pipe:1']
+    '-vf', chain(`fps=${fps},scale=640:-2`, toneMapFilter(color)), '-frames:v', String(MAX_PREVIEW_FRAMES), '-q:v', '6', '-f', 'image2pipe', '-c:v', 'mjpeg', 'pipe:1']
 }
-export function gifArgs(input: string, output: string, options: GifOptions, sourceWidth: number): string[] {
-  const width = Math.min(options.width, sourceWidth)
+export function gifArgs(input: string, output: string, options: GifOptions, source: VideoSource): string[] {
+  const width = Math.min(options.width, croppedWidth(options.crop, source.width))
   // Two-pass palette in one graph keeps colours far better than ffmpeg's default GIF palette.
-  const graph = `[0:v]fps=${options.fps},scale=${width}:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle`
+  const graph = `[0:v]${chain(...cropFilter(options.crop), `fps=${options.fps}`, `scale=${width}:-1:flags=lanczos`, toneMapFilter(source.color), 'format=rgb24')},split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle`
   return ['-hide_banner', '-nostdin', '-loglevel', 'error', '-progress', 'pipe:1', '-ss', seconds(options.start), '-t', seconds(options.end - options.start),
     '-i', input, '-an', '-sn', '-dn', '-filter_complex', graph, '-frames:v', String(gifFrameCount(options)), '-loop', '0', '-f', 'gif', '-y', output]
 }
 /** Reads duration, display size (rotation applied) from `ffmpeg -i` stderr. */
-export function parseProbe(stderr: string): { duration: number; width: number; height: number } {
+export function parseProbe(stderr: string): { duration: number; width: number; height: number; hasAudio: boolean; color: VideoColor } {
   const duration = /Duration:\s*(\d+):(\d{2}):(\d{2}(?:\.\d+)?)/.exec(stderr)
   const video = /Stream #[^\n]*Video:[^\n]*?\b(\d{2,5})x(\d{2,5})\b/.exec(stderr)
   if (!duration || !video) throw new Error('동영상 길이나 화면 크기를 읽을 수 없습니다.')
@@ -47,7 +75,7 @@ export function parseProbe(stderr: string): { duration: number; width: number; h
   const rotation = /rotation of (-?\d+(?:\.\d+)?) degrees|rotate\s*:\s*(-?\d+)/.exec(stderr)
   const turned = rotation ? Math.abs(Math.round(Number(rotation[1] ?? rotation[2]) / 90)) % 2 === 1 : false
   const width = Number(video[1]), height = Number(video[2])
-  return { duration: total, width: turned ? height : width, height: turned ? width : height }
+  return { duration: total, width: turned ? height : width, height: turned ? width : height, hasAudio: /Stream #[^\n]*Audio:/.test(stderr), color: parseColor(stderr) }
 }
 /** Splits ffmpeg's concatenated MJPEG output into separate JPEG files. Entropy data byte-stuffs 0xFF, so FFD9 only marks an end. */
 export function splitJpegs(bytes: Uint8Array): Uint8Array[] {

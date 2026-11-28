@@ -1113,7 +1113,7 @@ function App() {
         <button role="tab" aria-selected={mode === 'photo'} disabled={gifBusy || makerBusy} onClick={() => switchMode('photo')}><span className="label">사진 편집</span><span className="label-short">사진</span></button>
         <button role="tab" aria-selected={mode === 'thumb'} disabled={busy || gifBusy || makerBusy} onClick={() => switchMode('thumb')}><span className="label">썸네일 만들기</span><span className="label-short">썸네일</span></button>
         <button role="tab" aria-label="스티커 만들기" aria-selected={mode === 'maker'} disabled={busy || gifBusy} onClick={() => switchMode('maker')}><span className="label">스티커 만들기</span><span className="label-short">스티커</span></button>
-        <button role="tab" aria-selected={mode === 'gif'} disabled={busy || makerBusy} onClick={() => switchMode('gif')}><span className="label">GIF 만들기</span><span className="label-short">GIF</span></button>
+        <button role="tab" aria-label="동영상" aria-selected={mode === 'gif'} disabled={busy || makerBusy} onClick={() => switchMode('gif')}><span className="label">동영상</span><span className="label-short">영상</span></button>
       </div>
       <div className="photo-tools" hidden={mode !== 'thumb'}>
         <nav aria-label="썸네일 사진" className="toolbar-group">

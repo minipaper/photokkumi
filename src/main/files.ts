@@ -44,28 +44,46 @@ async function writeExclusive(destination: string, bytes: Uint8Array) {
 }
 
 export async function saveUnique(directory: string, source: string, bytes: Uint8Array, extension: '.png' | '.jpg' | '.zip' | '.gif' = '.png', suffix = '_kkumi'): Promise<string> {
+  const temporary = join(directory, `.${randomUUID()}.tmp`)
+  await writeExclusive(temporary, bytes)
+  // Portable no-overwrite fallback. A partial name is visible until fsync/close.
+  try { return await claimName(directory, source, extension, suffix, temporary, destination => writeExclusive(destination, bytes)) }
+  finally { await removeFile(temporary) }
+}
+/**
+ * Like saveUnique for outputs too large to hold in memory (MP4): `temporary` is a finished file that ffmpeg
+ * wrote inside `directory`. It gets the first free `<stem>_kkumi[_n].mp4` name and is removed in every case.
+ */
+export async function publishUnique(directory: string, source: string, temporary: string, extension: '.mp4', suffix = '_kkumi'): Promise<string> {
+  try { return await claimName(directory, source, extension, suffix, temporary, async destination => {
+    try { await fs.copyFile(temporary, destination, fs.constants.COPYFILE_EXCL) }
+    catch (error) {
+      // EXCL: a destination left behind by any other failure is our partial copy.
+      if (errorCode(error) !== 'EEXIST') await fs.unlink(destination).catch(() => undefined)
+      throw error
+    }
+  }) }
+  finally { await removeFile(temporary) }
+}
+/** First free name for the finished temporary file: a hard link (atomic, no overwrite), else `fallback` (must fail with EEXIST). */
+async function claimName(directory: string, source: string, extension: string, suffix: string, temporary: string, fallback: (destination: string) => Promise<void>) {
   // Control characters must be removed from Windows filenames.
   // eslint-disable-next-line no-control-regex
   const stem = basename(source, extname(source)).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').slice(0, 100) || 'photo'
-  const temporary = join(directory, `.${randomUUID()}.tmp`)
-  await writeExclusive(temporary, bytes)
   let canLink = true
-  try {
-    for (let i = 0; i < 10_000; i++) {
-      const destination = join(directory, `${stem}${suffix}${i ? `_${i}` : ''}${extension}`)
-      try {
-        if (canLink) {
-          try { await fs.link(temporary, destination); return destination }
-          catch (error) {
-            if (!LINK_UNAVAILABLE.has(errorCode(error) ?? '')) throw error
-            canLink = false
-          }
+  for (let i = 0; i < 10_000; i++) {
+    const destination = join(directory, `${stem}${suffix}${i ? `_${i}` : ''}${extension}`)
+    try {
+      if (canLink) {
+        try { await fs.link(temporary, destination); return destination }
+        catch (error) {
+          if (!LINK_UNAVAILABLE.has(errorCode(error) ?? '')) throw error
+          canLink = false
         }
-        // Portable no-overwrite fallback. A partial name is visible until fsync/close.
-        await writeExclusive(destination, bytes)
-        return destination
-      } catch (error) { if (errorCode(error) !== 'EEXIST') throw error }
-    }
-    throw new Error('사용 가능한 파일 이름이 없습니다.')
-  } finally { await removeFile(temporary) }
+      }
+      await fallback(destination)
+      return destination
+    } catch (error) { if (errorCode(error) !== 'EEXIST') throw error }
+  }
+  throw new Error('사용 가능한 파일 이름이 없습니다.')
 }

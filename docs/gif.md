@@ -1,5 +1,7 @@
 # GIF 만들기 (2026-11-09)
 
+> 2026-11-28: 탭 이름이 `동영상`으로 바뀌고 MP4 저장·영상 자르기·소리 옵션·HDR 색 변환이 추가됐다. [video.md](./video.md) 참고.
+
 ## 흐름
 - 툴바 `사진 편집 | GIF 만들기` 탭으로 모드를 바꾼다. 두 모드의 상태는 서로 유지된다(사진 편집 중 GIF로 갔다 와도 편집 그대로).
 - ffmpeg가 없으면 설치 안내 카드: Windows `winget install Gyan.FFmpeg`(macOS `brew install ffmpeg`) 명령을 복사해 설치 → `다시 찾기`. 또는 `ffmpeg 위치 선택`으로 실행 파일 지정(`userData/tools.json`에 기억).

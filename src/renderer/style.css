@@ -85,8 +85,7 @@ main { display: flex; flex-direction: column; height: 100vh; }
 .gif-workspace { flex: 1; min-width: 0; display: flex; outline: none; }
 .gif-main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--canvas); }
 .gif-preview { flex: 1; min-height: 0; display: grid; place-items: center; padding: 20px; }
-.gif-preview { position: relative; }
-.gif-preview img { position: absolute; inset: 20px; width: calc(100% - 40px); height: calc(100% - 40px); object-fit: contain; }
+.gif-preview { position: relative; overflow: hidden; }
 .gif-timeline { flex: none; display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--surface); border-top: 1px solid var(--line); }
 .gif-track { position: relative; flex: 1; height: 54px; border-radius: 6px; overflow: visible; cursor: pointer; touch-action: none; }
 .gif-thumbs { position: absolute; inset: 0; display: flex; overflow: hidden; border-radius: 6px; background: #000; }
@@ -478,3 +477,26 @@ dialog.maker-batch { width: min(440px, 92vw); }
 .batch-list small { color: var(--muted); }
 .maker-panel .segmented.three { grid-template-columns: repeat(3, 1fr); }
 .maker-fields .field-head { display: flex; justify-content: space-between; }
+/* 동영상: the preview frame keeps the video's aspect so the crop box lines up with the pixels. */
+.gif-stage { position: absolute; inset: 20px; display: grid; place-items: center; }
+.gif-frame-box { position: relative; }
+.gif-frame-box img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; }
+.video-crop { position: absolute; box-shadow: 0 0 0 9999px #11141bb0; outline: 2px solid #fff; cursor: move; touch-action: none;
+  background-image: linear-gradient(#fff6, #fff6), linear-gradient(#fff6, #fff6), linear-gradient(#fff6, #fff6), linear-gradient(#fff6, #fff6);
+  background-size: 1px 100%, 1px 100%, 100% 1px, 100% 1px; background-position: 33.33% 0, 66.67% 0, 0 33.33%, 0 66.67%; background-repeat: no-repeat; }
+.video-crop-handle { position: absolute; width: 14px; height: 14px; margin: -7px; background: #fff; border: 2px solid var(--accent); border-radius: 3px; touch-action: none; }
+.video-crop-handle.top-left, .video-crop-handle.top-center, .video-crop-handle.top-right { top: 0; }
+.video-crop-handle.bottom-left, .video-crop-handle.bottom-center, .video-crop-handle.bottom-right { top: 100%; }
+.video-crop-handle.middle-left, .video-crop-handle.middle-right { top: 50%; }
+.video-crop-handle.top-left, .video-crop-handle.bottom-left, .video-crop-handle.middle-left { left: 0; }
+.video-crop-handle.top-right, .video-crop-handle.bottom-right, .video-crop-handle.middle-right { left: 100%; }
+.video-crop-handle.top-center, .video-crop-handle.bottom-center { left: 50%; }
+.video-crop-handle.top-left, .video-crop-handle.bottom-right { cursor: nwse-resize; }
+.video-crop-handle.top-right, .video-crop-handle.bottom-left { cursor: nesw-resize; }
+.video-crop-handle.top-center, .video-crop-handle.bottom-center { cursor: ns-resize; }
+.video-crop-handle.middle-left, .video-crop-handle.middle-right { cursor: ew-resize; }
+.gif-fields .wide { grid-column: 1 / -1; }
+.gif-fields label.check { flex-direction: row; align-items: center; align-self: end; height: 30px; gap: 6px; color: var(--text); font-size: 13px; }
+.gif-fields label.check input { width: auto; }
+/* Short windows (down to the 580px minimum): drop the footer note so the settings never scroll. */
+@media (max-height: 660px) { .gif-footer > .hint { display: none; } }

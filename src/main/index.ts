@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, protocol, screen, session } from 'electron'
 import { mkdirSync, readFileSync, rmSync } from 'node:fs'
-import { readFile, realpath, stat, lstat, unlink } from 'node:fs/promises'
+import { open, readFile, realpath, stat, lstat, unlink } from 'node:fs/promises'
 import { basename, delimiter, dirname, extname, join, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { ImageAsset, Result, SaveRequest, SaveReceipt } from '../shared/model'
@@ -9,7 +9,7 @@ import { orientThumbnail } from '../shared/thumbnail'
 import { inspectImage, MAX_OUTPUT_BYTES, MAX_PIXELS } from './images'
 import { decodeHeicInWorker, fitPixels, withIccProfile } from './heic'
 import heicWorker from './heic-worker?modulePath'
-import { saveUnique, SaveCleanupError } from './files'
+import { publishUnique, saveUnique, SaveCleanupError } from './files'
 import { SCRIPT_CSP, allowedPermission, bundleFileType, trustedSender, validSaveRequest } from './security'
 import { StickerLibrary, readBounded } from './library'
 import { seedDefaultStickers } from './defaults'
@@ -20,7 +20,8 @@ import { turnedSize } from '../shared/turn'
 import { PhotoStore, validDroppedPaths } from './photos'
 import { THUMB_SESSION_ID, THUMB_SIZE, validThumbSaveRequest, type ThumbSaveRequest } from '../shared/shapes'
 import { ToolStore, VideoStore, runTool } from './ffmpeg'
-import { VIDEO_EXTENSIONS, validGifOptions, gifArgs, previewArgs, previewFps, parseProbe, splitJpegs, parseProgress, type GifOptions, type GifReceipt, type VideoInfo, type VideoRef } from '../shared/gif'
+import { VIDEO_EXTENSIONS, cropFits, validGifOptions, gifArgs, previewArgs, previewFps, parseProbe, splitJpegs, parseProgress, type GifOptions, type GifReceipt, type VideoInfo, type VideoRef } from '../shared/gif'
+import { isMp4, mp4Args, pickH264Encoder, validMp4Options, type H264Encoder, type Mp4Options } from '../shared/video'
 import type { ChildProcess } from 'node:child_process'
 import { autoUpdater } from 'electron-updater'
 import { UpdateController } from './updater'
@@ -149,28 +150,24 @@ async function loadVideo(id: string): Promise<VideoInfo> {
   const probe = await runTool(ffmpeg, ['-hide_banner', '-nostdin', '-i', record.path], { timeoutMs: 30_000, maxStdout: 1 << 20 })
   const info = parseProbe(probe.stderr)
   const fps = previewFps(info.duration)
-  const preview = await runTool(ffmpeg, previewArgs(record.path, fps), { timeoutMs: 180_000, maxStdout: 96 * 1024 * 1024, signal: gifJob = {} })
+  const preview = await runTool(ffmpeg, previewArgs(record.path, fps, info.color), { timeoutMs: 180_000, maxStdout: 96 * 1024 * 1024, signal: gifJob = {} })
   gifJob = null
   const frames = splitJpegs(preview.stdout)
   if (preview.code !== 0 || !frames.length) throw new Error('동영상을 읽지 못했습니다. 손상되었거나 ffmpeg가 지원하지 않는 형식입니다.')
-  record.width = info.width; record.duration = info.duration
+  Object.assign(record, { width: info.width, height: info.height, duration: info.duration, hasAudio: info.hasAudio, color: info.color })
   return { ...record.ref, ...info, previewFps: fps, frames }
 }
 async function createGif(id: string, options: GifOptions): Promise<GifReceipt | null> {
   const ffmpeg = tools.require(), record = videos.get(id)
-  if (!record.duration || !record.width || !validGifOptions(options, record.duration)) throw new Error('GIF 구간·크기 설정을 확인하세요.')
-  let directory = outputDirectory
-  if (!directory) {
-    const selected = await dialog.showOpenDialog(win!, { title: 'GIF를 저장할 폴더', properties: ['openDirectory', 'createDirectory'] })
-    if (selected.canceled || !selected.filePaths[0]) return null
-    directory = selected.filePaths[0]
-  }
+  if (!record.duration || !record.width || !record.height || !validGifOptions(options, record.duration) || !cropFits(options.crop, record as { width: number; height: number })) throw new Error('GIF 구간·크기 설정을 확인하세요.')
+  const directory = await videoOutputDirectory('GIF를 저장할 폴더')
+  if (!directory) return null
   const temporary = join(app.getPath('temp'), `photokkumi-${randomUUID()}.gif`)
   const job: { child?: ChildProcess; temporary?: string } = { temporary }
   gifJob = job
   try {
     const length = options.end - options.start
-    const result = await runTool(ffmpeg, gifArgs(record.path, temporary, options, record.width), {
+    const result = await runTool(ffmpeg, gifArgs(record.path, temporary, options, { width: record.width, color: record.color ?? 'sdr' }), {
       timeoutMs: 600_000, maxStdout: 16 << 20, signal: job,
       onStdout: chunk => { const time = parseProgress(chunk.toString('utf8')); if (time !== null) win?.webContents.send('gif:progress', Math.min(1, time / length)) }
     })
@@ -191,6 +188,60 @@ async function createGif(id: string, options: GifOptions): Promise<GifReceipt | 
     await unlink(temporary).catch(() => undefined)
   }
 }
+async function videoOutputDirectory(title: string) {
+  if (outputDirectory) return outputDirectory
+  const selected = await dialog.showOpenDialog(win!, { title, properties: ['openDirectory', 'createDirectory'] })
+  return selected.canceled || !selected.filePaths[0] ? null : selected.filePaths[0]
+}
+/** The H.264 encoder of each ffmpeg found so far (`ffmpeg -encoders` takes about 0.1 s). */
+const encoders = new Map<string, H264Encoder | null>()
+async function h264Encoder(ffmpeg: string) {
+  if (!encoders.has(ffmpeg)) {
+    const result = await runTool(ffmpeg, ['-hide_banner', '-nostdin', '-encoders'], { timeoutMs: 15_000, maxStdout: 1 << 20 })
+    encoders.set(ffmpeg, result.code === 0 ? pickH264Encoder(result.stdout.toString('utf8')) : null)
+  }
+  const encoder = encoders.get(ffmpeg)
+  if (!encoder) throw new Error('이 ffmpeg로는 MP4(H.264)를 만들 수 없습니다. 안내의 정식 빌드(gyan.dev·BtbN·Homebrew)를 설치하세요.')
+  return encoder
+}
+async function exportMp4(id: string, options: Mp4Options): Promise<GifReceipt | null> {
+  const ffmpeg = tools.require(), record = videos.get(id)
+  if (!record.duration || !record.width || !record.height || !validMp4Options(options, record.duration) || !cropFits(options.crop, record as { width: number; height: number })) throw new Error('MP4 구간·크기 설정을 확인하세요.')
+  const encoder = await h264Encoder(ffmpeg)
+  const chosen = await videoOutputDirectory('MP4를 저장할 폴더')
+  if (!chosen) return null
+  let directory: string
+  try { directory = await realpath(chosen) } catch (error) { throw new Error('출력 폴더를 확인하세요.', { cause: error }) }
+  // Written next to the result so the final name is a hard link, not a copy of a large file. Hidden until then.
+  const temporary = join(directory, `.${randomUUID()}.tmp`)
+  const job: { child?: ChildProcess; temporary?: string } = { temporary }
+  gifJob = job
+  try {
+    const length = options.end - options.start
+    const result = await runTool(ffmpeg, mp4Args(record.path, temporary, { ...options, audio: options.audio && !!record.hasAudio }, { width: record.width, color: record.color ?? 'sdr' }, encoder), {
+      timeoutMs: 30 * 60_000, maxStdout: 16 << 20, signal: job,
+      onStdout: chunk => { const time = parseProgress(chunk.toString('utf8')); if (time !== null) win?.webContents.send('gif:progress', Math.min(1, time / length)) }
+    })
+    if (result.code !== 0) throw new Error('MP4를 만들지 못했습니다. ' + (result.stderr.split(/\r?\n/).filter(Boolean).at(-1)?.slice(0, 160) ?? '폴더 권한·여유 공간을 확인하세요.'))
+    const info = await stat(temporary)
+    const head = new Uint8Array(8)
+    const handle = await open(temporary, 'r')
+    try { await handle.read(head, 0, 8, 0) } finally { await handle.close() }
+    if (!isMp4(head) || info.size < 64 || info.size > MAX_MP4_BYTES) throw new Error('MP4 파일을 확인할 수 없습니다.')
+    try {
+      const name = basename(await publishUnique(directory, record.path, temporary, '.mp4'))
+      setOutputDirectory(directory)
+      return { name, folderLabel: directory, bytes: info.size }
+    } catch (error) {
+      if (error instanceof SaveCleanupError) throw error
+      throw new Error('MP4를 저장하지 못했습니다. 폴더 권한·여유 공간을 확인하세요.', { cause: error })
+    }
+  } finally {
+    if (gifJob === job) gifJob = null
+    await unlink(temporary).catch(() => undefined)
+  }
+}
+const MAX_MP4_BYTES = 4 * 1024 ** 3
 function cancelGif() { gifJob?.child?.kill('SIGKILL'); return null }
 const MAX_GIF_BYTES = 200 * 1024 * 1024
 
@@ -422,6 +473,7 @@ app.whenReady().then(() => {
     'gif:open-video': { count: 0, lock: true, run: openVideo },
     'gif:load-video': { count: 1, lock: true, valid: args => validAssetId(args[0]), run: id => loadVideo(id as string) },
     'gif:create': { count: 2, lock: true, valid: args => validAssetId(args[0]) && validGifOptions(args[1]), run: (id, options) => createGif(id as string, options as GifOptions) },
+    'video:export-mp4': { count: 2, lock: true, valid: args => validAssetId(args[0]) && validMp4Options(args[1]), run: (id, options) => exportMp4(id as string, options as Mp4Options) },
     'gif:cancel': { count: 0, run: cancelGif }
   }
   for (const [channel, action] of Object.entries(gifActions)) {

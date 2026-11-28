@@ -214,7 +214,7 @@ test('안전한 창 설정·IPC 거부·잘못된 이미지 거부', async () =>
     return { sandbox: p.sandbox, contextIsolation: p.contextIsolation, nodeIntegration: p.nodeIntegration }
   })
   expect(prefs).toEqual({ sandbox: true, contextIsolation: true, nodeIntegration: false })
-  expect(await page.evaluate(() => Object.keys(window.photokkumi).sort())).toEqual(['addMakerStickers', 'backupLibrary', 'cancelGif', 'checkForUpdate', 'chooseGifTool', 'chooseOutputFolder', 'choosePhotoFolder', 'choosePhotos', 'createGif', 'deleteSticker', 'downloadUpdate', 'getOutputFolder', 'getOutputSettings', 'getUpdateState', 'gifToolStatus', 'importDroppedFiles', 'importDroppedStickers', 'importStickers', 'installUpdate', 'listStickers', 'loadVideo', 'locateGifTool', 'onCloseRequested', 'onGifProgress', 'onPhotoProgress', 'onUpdateState', 'openVideo', 'readPhoto', 'removePhoto', 'resolveClose', 'restoreLibrary', 'saveImage', 'saveMakerStickers', 'saveThumbnail', 'setStickerReferences', 'updateOutputSettings', 'updateSticker', 'useSticker'])
+  expect(await page.evaluate(() => Object.keys(window.photokkumi).sort())).toEqual(['addMakerStickers', 'backupLibrary', 'cancelGif', 'checkForUpdate', 'chooseGifTool', 'chooseOutputFolder', 'choosePhotoFolder', 'choosePhotos', 'createGif', 'deleteSticker', 'downloadUpdate', 'exportMp4', 'getOutputFolder', 'getOutputSettings', 'getUpdateState', 'gifToolStatus', 'importDroppedFiles', 'importDroppedStickers', 'importStickers', 'installUpdate', 'listStickers', 'loadVideo', 'locateGifTool', 'onCloseRequested', 'onGifProgress', 'onPhotoProgress', 'onUpdateState', 'openVideo', 'readPhoto', 'removePhoto', 'resolveClose', 'restoreLibrary', 'saveImage', 'saveMakerStickers', 'saveThumbnail', 'setStickerReferences', 'updateOutputSettings', 'updateSticker', 'useSticker'])
   expect(await page.evaluate(() => typeof (window as unknown as { require?: unknown }).require)).toBe('undefined')
   const invalid = await page.evaluate(() => window.photokkumi.saveImage({ photoId: '../../anything', png: new Uint8Array(), output: { format: 'png', resizeEnabled: false, resizeBasis: 'width', landscapeSize: 1600, portraitSize: 900, preventUpscale: true, quality: 100 } }))
   expect(invalid.ok).toBe(false)
@@ -1961,7 +1961,7 @@ async function relaunch(env: Record<string, string>) {
   await app.context().setOffline(true)
 }
 
-test('GIF 만들기: ffmpeg 미설치 안내·위치 지정, 회전 HEVC MOV 드롭, [ ] 구간 선택, 원본 불변 GIF 저장', async () => {
+test('동영상 GIF: ffmpeg 미설치 안내·위치 지정, 회전 HEVC MOV 드롭, [ ] 구간 선택, 원본 불변 GIF 저장', async () => {
   const ffmpeg = findFfmpeg()
   test.skip(!ffmpeg, 'ffmpeg가 설치되지 않은 환경')
   const { spawnSync } = process.getBuiltinModule('node:child_process') as typeof import('node:child_process')
@@ -1972,8 +1972,8 @@ test('GIF 만들기: ffmpeg 미설치 안내·위치 지정, 회전 HEVC MOV 드
   const originalHash = createHash('sha256').update(await readFile(clip)).digest('hex')
 
   await relaunch({ PHOTOKKUMI_FFMPEG_CANDIDATES: '' })
-  await page.getByRole('tab', { name: 'GIF 만들기' }).click()
-  await expect(page.getByRole('heading', { name: 'GIF 만들기에는 ffmpeg가 필요합니다' })).toBeVisible()
+  await page.getByRole('tab', { name: '동영상' }).click()
+  await expect(page.getByRole('heading', { name: '동영상 편집에는 ffmpeg가 필요합니다' })).toBeVisible()
   await expect(page.getByRole('textbox', { name: '설치 명령' })).toHaveValue(/ffmpeg/i)
   await page.getByRole('button', { name: '다시 찾기' }).click()
   await expect(page.getByRole('status')).toContainText('찾지 못했습니다')
@@ -1988,14 +1988,15 @@ test('GIF 만들기: ffmpeg 미설치 안내·위치 지정, 회전 HEVC MOV 드
   await relaunch({ PHOTOKKUMI_FFMPEG_CANDIDATES: '' })
   // Drop the video while in photo mode: the app switches to the GIF maker.
   await drop([clip])
-  await expect(page.getByRole('tab', { name: 'GIF 만들기' })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('tab', { name: '동영상' })).toHaveAttribute('aria-selected', 'true')
   await expect(page.getByTestId('gif-frame')).toBeVisible({ timeout: 20_000 })
   await expect(page.getByText('4.0초 · 240 × 320')).toBeVisible()
+  await page.getByRole('radio', { name: 'GIF · 움짤' }).click()
   await expect(page.getByTestId('gif-span')).toHaveText('3.0초')
   await expect(page.getByTestId('gif-size')).toHaveText('240 × 320')
 
   // Keyboard: move 1s, set start; move to 3.5s, set end.
-  await page.getByRole('region', { name: 'GIF 만들기' }).or(page.getByLabel('GIF 만들기', { exact: true })).first().focus()
+  await page.getByLabel('동영상 편집', { exact: true }).focus()
   await page.keyboard.press('Shift+ArrowRight'); await page.keyboard.press('[')
   await expect(page.getByRole('spinbutton', { name: '시작 시간' })).toHaveValue('1')
   await page.keyboard.press('Shift+ArrowRight'); await page.keyboard.press('Shift+ArrowRight')
@@ -2029,6 +2030,56 @@ test('GIF 만들기: ffmpeg 미설치 안내·위치 지정, 회전 HEVC MOV 드
   // Photo editing state is independent of the GIF mode.
   await page.getByRole('tab', { name: '사진 편집' }).click()
   await expect(page.getByText('사진을 이 창으로 끌어다 놓으세요')).toBeVisible()
+  expect(errors).toEqual([])
+})
+
+test('동영상 MP4: 형식 선택, 3:4 자르기 상자 이동, 소리 유지/제거, 원본 불변', async () => {
+  const ffmpeg = findFfmpeg()
+  test.skip(!ffmpeg, 'ffmpeg가 설치되지 않은 환경')
+  const { spawnSync } = process.getBuiltinModule('node:child_process') as typeof import('node:child_process')
+  test.skip(!/^\s*V\S*\s+(libx264|h264_mf|h264_videotoolbox)\s/m.test(spawnSync(ffmpeg!, ['-hide_banner', '-encoders'], { encoding: 'utf8' }).stdout), 'H.264 인코더가 없는 ffmpeg')
+  // 3s 640×480: a red strip (the stray hand) on the left 200px, blue elsewhere, with a tone.
+  const clip = join(directory, '여름 영상.mp4')
+  expect(spawnSync(ffmpeg!, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=red:s=200x480:r=30:d=3[a];color=c=blue:s=440x480:r=30:d=3[b];[a][b]hstack',
+    '-f', 'lavfi', '-i', 'sine=frequency=440:duration=3', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', clip]).status).toBe(0)
+  const originalHash = createHash('sha256').update(await readFile(clip)).digest('hex')
+  const probe = (path: string) => spawnSync(ffmpeg!, ['-hide_banner', '-i', path], { encoding: 'utf8' }).stderr
+
+  await drop([clip])
+  await expect(page.getByTestId('gif-frame')).toBeVisible({ timeout: 20_000 })
+  await page.getByRole('radio', { name: 'MP4 · 동영상' }).click()
+  await expect(page.getByRole('button', { name: 'MP4로 저장' })).toBeVisible()
+  await expect(page.getByTestId('gif-size')).toHaveText('640 × 480')
+  await expect(page.getByTestId('video-audio')).toHaveText('포함')
+  await page.getByRole('combobox', { name: '자르기 비율' }).selectOption('3:4')
+  const box = page.getByTestId('video-crop')
+  await expect(box).toHaveAttribute('data-crop', '140,0,360,480')
+  // Ratio crops have corner handles only; drag the box to the right edge to leave the red strip out.
+  await expect(box.locator('.video-crop-handle')).toHaveCount(4)
+  const area = (await box.boundingBox())!
+  await page.mouse.move(area.x + area.width / 2, area.y + area.height / 2); await page.mouse.down()
+  await page.mouse.move(area.x + area.width * 2, area.y + area.height / 2, { steps: 6 }); await page.mouse.up()
+  await expect(box).toHaveAttribute('data-crop', '280,0,360,480')
+  await expect(page.getByTestId('gif-size')).toHaveText('360 × 480')
+
+  await select(directory)
+  await page.getByRole('button', { name: 'MP4로 저장' }).click()
+  await expect(page.getByRole('status')).toContainText('MP4 저장 완료 · 여름 영상_kkumi.mp4', { timeout: 60_000 })
+  const withSound = probe(join(directory, '여름 영상_kkumi.mp4'))
+  expect(withSound).toMatch(/Video: h264[^\n]*360x480/); expect(withSound).toMatch(/Audio: aac/)
+  // The kept part is all blue: the red strip was cut off.
+  const pixel = spawnSync(ffmpeg!, ['-hide_banner', '-loglevel', 'error', '-i', join(directory, '여름 영상_kkumi.mp4'), '-frames:v', '1', '-vf', 'crop=4:4:0:238,scale=1:1,format=rgb24', '-f', 'rawvideo', 'pipe:1']).stdout
+  expect(pixel[2]).toBeGreaterThan(200); expect(pixel[0]).toBeLessThan(40)
+
+  await page.getByRole('checkbox', { name: '소리 포함' }).uncheck()
+  await expect(page.getByTestId('video-audio')).toHaveText('없음')
+  await page.getByRole('button', { name: 'MP4로 저장' }).click()
+  await expect(page.getByRole('status')).toContainText('여름 영상_kkumi_1.mp4', { timeout: 60_000 })
+  const silent = probe(join(directory, '여름 영상_kkumi_1.mp4'))
+  expect(silent).toMatch(/360x480/); expect(silent).not.toMatch(/Audio:/)
+  expect(createHash('sha256').update(await readFile(clip)).digest('hex')).toBe(originalHash)
+  // No hidden temporary file is left next to the results.
+  expect((await readdir(directory)).filter(name => name.endsWith('.tmp'))).toEqual([])
   expect(errors).toEqual([])
 })
 

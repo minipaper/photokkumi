@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import { saveUnique } from '../src/main/files'
+import { publishUnique, saveUnique } from '../src/main/files'
 
 const directories: string[] = []
 const unsupported = () => { throw Object.assign(new Error('hard links unsupported'), { code: 'ENOTSUP' }) }
@@ -139,4 +139,25 @@ it('OS가 삭제를 계속 거부하면 정리 실패를 명시적으로 반환�
   await expect(saveUnique(dir, source, Buffer.from('data'))).rejects.toThrow('파일 정리를 마치지 못했습니다: 원본 사진_kkumi.png')
   expect((await fs.readdir(dir)).filter(name => name.endsWith('.tmp'))).toEqual([])
   expect(await fs.readFile(source, 'utf8')).toBe('source unchanged')
+})
+describe('큰 결과(MP4)를 이름 붙여 확정', () => {
+  it.each([['하드 링크', false], ['복사 대체', true]])('%s: 기존 결과를 덮지 않고 다음 번호로, 임시 파일은 지운다', async (_, noLink) => {
+    const { dir, source } = await fixture()
+    await fs.writeFile(join(dir, '원본 사진_kkumi.mp4'), 'existing')
+    if (noLink) vi.spyOn(fs, 'link').mockImplementation(unsupported)
+    const temporary = join(dir, '.job.tmp'); await fs.writeFile(temporary, 'video bytes')
+    const path = await publishUnique(dir, source, temporary, '.mp4')
+    expect(basename(path)).toBe('원본 사진_kkumi_1.mp4')
+    expect(await fs.readFile(path, 'utf8')).toBe('video bytes')
+    expect(await fs.readFile(join(dir, '원본 사진_kkumi.mp4'), 'utf8')).toBe('existing')
+    expect((await fs.readdir(dir)).sort()).toEqual(['원본 사진.png', '원본 사진_kkumi.mp4', '원본 사진_kkumi_1.mp4'])
+  })
+  it('복사가 실패하면 쓰다 만 결과와 임시 파일을 남기지 않는다', async () => {
+    const { dir, source } = await fixture()
+    vi.spyOn(fs, 'link').mockImplementation(unsupported)
+    vi.spyOn(fs, 'copyFile').mockImplementation(async (_from, to) => { await fs.writeFile(to as string, 'part'); throw Object.assign(new Error('disk full'), { code: 'ENOSPC' }) })
+    const temporary = join(dir, '.job.tmp'); await fs.writeFile(temporary, 'video bytes')
+    await expect(publishUnique(dir, source, temporary, '.mp4')).rejects.toThrow('disk full')
+    expect(await fs.readdir(dir)).toEqual(['원본 사진.png'])
+  })
 })

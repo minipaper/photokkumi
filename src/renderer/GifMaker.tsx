@@ -1,8 +1,20 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
 import { loadPref, savePref } from './remember'
-import { DEFAULT_GIF, GIF_FPS, GIF_WIDTHS, MAX_GIF_SECONDS, gifFrameCount, validGifOptions, type GifReceipt, type ToolStatus, type VideoRef } from '../shared/gif'
+import { DEFAULT_GIF, GIF_FPS, GIF_WIDTHS, MAX_GIF_SECONDS, gifFrameCount, validGifOptions, type GifReceipt, type ToolStatus, type VideoCrop, type VideoRef } from '../shared/gif'
+import { DEFAULT_MP4, MAX_MP4_SECONDS, MP4_WIDTHS, mp4Width, validMp4Options } from '../shared/video'
+import { CROP_LABELS, aspectRatio, centeredCrop, type CropRect } from '../shared/crop'
+import type { VideoColor } from '../shared/hdr'
+import { VideoCropBox } from './VideoCropBox'
 
-interface Loaded { id: string; name: string; duration: number; width: number; height: number; previewFps: number; urls: string[] }
+interface Loaded { id: string; name: string; duration: number; width: number; height: number; hasAudio: boolean; color: VideoColor; previewFps: number; urls: string[] }
+type Format = 'gif' | 'mp4'
+/** 자르기 choices; 'none' keeps the whole frame. */
+const VIDEO_ASPECTS = ['none', 'free', '16:9', '4:3', '1:1', '3:4', '9:16'] as const
+type VideoAspect = typeof VIDEO_ASPECTS[number]
+const LIMIT: Record<Format, number> = { gif: MAX_GIF_SECONDS, mp4: MAX_MP4_SECONDS }
+/** ffmpeg's crop (even sizes) and `scale=W:-2` (height rounded to an even number). */
+const even = (value: number) => Math.floor(value / 2) * 2
+const formatSeconds = (value: number) => value >= 60 ? `${Math.floor(value / 60)}분 ${Math.round(value % 60)}초` : `${value}초`
 interface Props {
   /** A video handed over from a drop in either mode; `nonce` lets the same file be reopened. */
   incoming: { ref: VideoRef; nonce: number } | null
@@ -30,6 +42,11 @@ export function GifMaker({ incoming, outputFolder, onSaved, onStatus, onError, o
   const [playing, setPlaying] = useState(false)
   const [width, setWidth] = useState<number>(() => loadPref('pk.gifWidth', DEFAULT_GIF.width, (v): v is number => (GIF_WIDTHS as readonly unknown[]).includes(v)))
   const [fps, setFps] = useState<number>(() => loadPref('pk.gifFps', DEFAULT_GIF.fps, (v): v is number => (GIF_FPS as readonly unknown[]).includes(v)))
+  const [format, setFormat] = useState<Format>(() => loadPref('pk.videoFormat', 'gif', (v): v is Format => v === 'gif' || v === 'mp4'))
+  const [mp4Size, setMp4Size] = useState<number>(() => loadPref('pk.mp4Width', DEFAULT_MP4.width, (v): v is number => (MP4_WIDTHS as readonly unknown[]).includes(v)))
+  const [audio, setAudio] = useState<boolean>(() => loadPref('pk.videoAudio', DEFAULT_MP4.audio, (v): v is boolean => typeof v === 'boolean'))
+  const [aspect, setAspect] = useState<VideoAspect>('none')
+  const [crop, setCrop] = useState<CropRect | null>(null)
   const [progress, setProgress] = useState(0)
   const root = useRef<HTMLDivElement>(null)
   const track = useRef<HTMLDivElement>(null)
@@ -57,11 +74,13 @@ export function GifMaker({ incoming, outputFolder, onSaved, onStatus, onError, o
     const info = unwrap(await api.loadVideo(ref.id))
     const urls = info.frames.map(bytes => URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' })))
     setVideo(previous => { previous?.urls.forEach(url => URL.revokeObjectURL(url)); return { ...info, urls } })
-    const end = round(Math.min(info.duration, 3))
+    // A GIF is usually a short moment; an MP4 is usually the whole clip minus the edges.
+    const end = round(Math.min(info.duration, format === 'gif' ? 3 : MAX_MP4_SECONDS))
     setRange({ start: 0, end }); setPlayhead(0)
-    onStatus(`${info.name} · ${info.duration.toFixed(1)}초 · 사용할 구간을 [ ] 로 고른 뒤 GIF로 저장하세요.`)
+    setAspect('none'); setCrop(null)
+    onStatus(`${info.name} · ${info.duration.toFixed(1)}초 · 사용할 구간을 [ ] 로 고른 뒤 저장하세요.`)
     root.current?.focus({ preventScroll: true })
-  }), [act, api, onStatus])
+  }), [act, api, onStatus, format])
   useEffect(() => {
     if (!pending || !tool?.found || busy) return
     setPending(null); void load(pending)
@@ -82,8 +101,8 @@ export function GifMaker({ incoming, outputFolder, onSaved, onStatus, onError, o
 
   if (!tool) return <div className="gif-center"><p className="hint">ffmpeg를 찾는 중…</p></div>
   if (!tool.found) return <div className="gif-center"><section className="gif-setup" aria-label="ffmpeg 설치 안내">
-    <h2>GIF 만들기에는 ffmpeg가 필요합니다</h2>
-    <p>포토꾸미는 ffmpeg를 포함하지 않습니다. 무료 프로그램인 ffmpeg를 한 번만 설치하면 휴대폰·카메라로 찍은 MOV, MP4 동영상을 GIF로 만들 수 있습니다.</p>
+    <h2>동영상 편집에는 ffmpeg가 필요합니다</h2>
+    <p>포토꾸미는 ffmpeg를 포함하지 않습니다. 무료 프로그램인 ffmpeg를 한 번만 설치하면 휴대폰·카메라로 찍은 MOV, MP4 동영상을 잘라 GIF나 MP4로 저장할 수 있습니다.</p>
     <ol>
       <li>{isMac ? '터미널을 엽니다.' : '시작 메뉴에서 “터미널” 또는 “명령 프롬프트”를 엽니다.'}</li>
       <li>아래 명령을 복사해 붙여 넣고 Enter를 누릅니다.
@@ -104,15 +123,36 @@ export function GifMaker({ incoming, outputFolder, onSaved, onStatus, onError, o
   const openVideo = () => act('tool', async () => { const ref = unwrap(await api.openVideo()); if (ref) setPending(ref) })
   if (!video) return <div className="gif-center">
     <div className="drop-target"><strong>{work === 'load' ? '미리보기를 만드는 중…' : '동영상을 이 창으로 끌어다 놓으세요'}</strong>
-      <span>MOV·MP4 동영상(아이폰, 갤럭시, 카메라 등)에서 원하는 구간만 골라 GIF로 만듭니다.</span>
+      <span>MOV·MP4 동영상(아이폰, 갤럭시, 카메라 등)에서 원하는 구간·영역만 골라 GIF나 MP4로 저장합니다.</span>
       <button disabled={busy} onClick={openVideo}>동영상 열기</button></div>
   </div>
 
   const span = range.end - range.start
+  const limit = LIMIT[format]
   const frames = gifFrameCount({ ...range, fps })
-  const outWidth = Math.min(width, video.width), outHeight = Math.max(1, Math.round(video.height * outWidth / video.width))
-  const options = { start: round(range.start), end: round(range.end), width, fps }
-  const valid = validGifOptions(options, video.duration)
+  // Only send a crop that actually cuts something.
+  const cut: VideoCrop | undefined = crop && (crop.width < video.width || crop.height < video.height) ? { x: crop.x, y: crop.y, width: crop.width, height: crop.height } : undefined
+  const area = cut ? { width: even(cut.width), height: even(cut.height) } : video
+  const times = { start: round(range.start), end: round(range.end) }
+  const gifOptions = { ...times, width, fps, ...(cut ? { crop: cut } : {}) }
+  const sizes = MP4_WIDTHS.filter(item => !item || item < area.width)
+  const mp4Options = { ...times, width: sizes.includes(mp4Size as never) ? mp4Size : 0, audio: audio && video.hasAudio, ...(cut ? { crop: cut } : {}) }
+  const outWidth = format === 'gif' ? Math.min(width, area.width) : mp4Width(mp4Options, video.width)
+  const outHeight = format === 'gif' ? Math.max(1, Math.round(area.height * outWidth / area.width)) : Math.round(area.height * outWidth / area.width / 2) * 2
+  const valid = format === 'gif' ? validGifOptions(gifOptions, video.duration) : validMp4Options(mp4Options, video.duration)
+  const ratio = aspect === 'none' ? null : aspectRatio(aspect, video)
+  function chooseAspect(next: VideoAspect) {
+    setAspect(next)
+    const { width, height } = video!
+    if (next === 'none') { setCrop(null); return }
+    // Free starts a little inside the frame so the handles are easy to grab; ratios start as large as fits.
+    const box = next === 'free' ? { x: Math.round(width * 0.05), y: Math.round(height * 0.05), width: Math.round(width * 0.9), height: Math.round(height * 0.9) } : centeredCrop(video!, next)
+    setCrop({ x: box.x, y: box.y, width: box.width, height: box.height })
+  }
+  function chooseFormat(next: Format) {
+    setFormat(next); savePref('pk.videoFormat', next)
+    if (range.end - range.start > LIMIT[next]) setRange(current => ({ start: current.start, end: round(current.start + LIMIT[next]) }))
+  }
   const frameIndex = Math.min(video.urls.length - 1, Math.max(0, Math.floor(playhead * video.previewFps)))
   const percent = (time: number) => `${time / video.duration * 100}%`
   const thumbs = Array.from({ length: 12 }, (_, index) => video.urls[Math.round(index * (video.urls.length - 1) / 11)])
@@ -121,8 +161,8 @@ export function GifMaker({ incoming, outputFolder, onSaved, onStatus, onError, o
     const value = round(Math.min(video!.duration, Math.max(0, time)))
     setRange(current => {
       let { start, end } = current
-      if (which === 'start') { start = Math.min(value, end - MIN_SPAN); if (end - start > MAX_GIF_SECONDS) end = round(start + MAX_GIF_SECONDS) }
-      else { end = Math.max(value, start + MIN_SPAN); if (end - start > MAX_GIF_SECONDS) start = round(end - MAX_GIF_SECONDS) }
+      if (which === 'start') { start = Math.min(value, end - MIN_SPAN); if (end - start > limit) end = round(start + limit) }
+      else { end = Math.max(value, start + MIN_SPAN); if (end - start > limit) start = round(end - limit) }
       start = Math.max(0, round(start)); end = Math.min(video!.duration, round(end))
       setPlayhead(head => Math.min(end, Math.max(start, head)))
       return { start, end }
@@ -156,19 +196,22 @@ export function GifMaker({ incoming, outputFolder, onSaved, onStatus, onError, o
     if (!action || (event.key === ' ' && target.tagName === 'BUTTON')) return
     event.preventDefault(); action()
   }
+  const label = format === 'gif' ? 'GIF' : 'MP4'
   const create = () => act('create', async () => {
     setPlaying(false); setProgress(0)
-    onStatus('GIF를 만드는 중…')
-    const receipt = unwrap(await api.createGif(video.id, options))
+    onStatus(`${label}를 만드는 중…`)
+    const receipt = unwrap(format === 'gif' ? await api.createGif(video.id, gifOptions) : await api.exportMp4(video.id, mp4Options))
     if (!receipt) { onStatus('저장이 취소되었습니다.'); return }
     onSaved(receipt)
-    onStatus(`GIF 저장 완료 · ${receipt.name} · ${formatBytes(receipt.bytes)}`)
+    onStatus(`${label} 저장 완료 · ${receipt.name} · ${formatBytes(receipt.bytes)}`)
   })
 
-  return <div className="gif-workspace" ref={root} tabIndex={-1} onKeyDown={handleKey} aria-label="GIF 만들기">
+  return <div className="gif-workspace" ref={root} tabIndex={-1} onKeyDown={handleKey} aria-label="동영상 편집">
     <div className="gif-main">
       <div className="gif-preview">
-        <img src={video.urls[frameIndex]} alt={`${video.name} 미리보기`} data-testid="gif-frame" data-index={frameIndex} />
+        <VideoCropBox video={video} crop={crop} ratio={ratio} disabled={busy} onChange={setCrop}>
+          <img src={video.urls[frameIndex]} alt={`${video.name} 미리보기`} data-testid="gif-frame" data-index={frameIndex} />
+        </VideoCropBox>
       </div>
       <div className="gif-timeline">
         <button className="icon" aria-label={playing ? '일시 정지' : '구간 재생'} title="Space" disabled={busy} onClick={() => setPlaying(value => !value)}>{playing ? '❚❚' : '▶'}</button>
@@ -185,34 +228,48 @@ export function GifMaker({ incoming, outputFolder, onSaved, onStatus, onError, o
       </div>
       <p className="gif-keys">드래그로 구간 조절 · <kbd>[</kbd> 시작 지정 · <kbd>]</kbd> 끝 지정 · <kbd>Space</kbd> 재생 · <kbd>←</kbd><kbd>→</kbd> 이동(Shift 1초)</p>
     </div>
-    <aside className="gif-side" aria-label="GIF 설정">
+    <aside className="gif-side" aria-label="동영상 설정">
       <div className="pane-heading"><h2 title={video.name}>{video.name}</h2><button disabled={busy} onClick={openVideo}>다른 동영상</button></div>
-      <p className="hint">{video.duration.toFixed(1)}초 · {video.width} × {video.height}</p>
+      <p className="hint">{video.duration.toFixed(1)}초 · {video.width} × {video.height}{video.color !== 'sdr' ? ' · HDR' : ''}{video.hasAudio ? '' : ' · 소리 없음'}</p>
+      <div className="segmented" role="radiogroup" aria-label="저장 형식">
+        {(['gif', 'mp4'] as Format[]).map(item => <button key={item} role="radio" aria-checked={format === item} disabled={busy} onClick={() => chooseFormat(item)}>
+          {item === 'gif' ? 'GIF · 움짤' : 'MP4 · 동영상'}</button>)}
+      </div>
       <div className="gif-fields">
         <label>시작 (초)<input type="number" aria-label="시작 시간" min="0" step="0.1" disabled={busy} value={range.start} onChange={e => Number.isFinite(e.target.valueAsNumber) && setBoundary('start', e.target.valueAsNumber)} /></label>
         <label>끝 (초)<input type="number" aria-label="끝 시간" min="0" step="0.1" disabled={busy} value={range.end} onChange={e => Number.isFinite(e.target.valueAsNumber) && setBoundary('end', e.target.valueAsNumber)} /></label>
-        <label>너비<select aria-label="GIF 너비" disabled={busy} value={width} onChange={e => { const v = Number(e.target.value); setWidth(v); savePref('pk.gifWidth', v) }}>
-          {GIF_WIDTHS.map(item => <option key={item} value={item}>{item}px</option>)}</select></label>
-        <label>FPS<select aria-label="GIF FPS" disabled={busy} value={fps} onChange={e => { const v = Number(e.target.value); setFps(v); savePref('pk.gifFps', v) }}>
-          {GIF_FPS.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
+        <label className="wide">자르기<select aria-label="자르기 비율" disabled={busy} value={aspect} onChange={e => chooseAspect(e.target.value as VideoAspect)}>
+          {VIDEO_ASPECTS.map(item => <option key={item} value={item}>{item === 'none' ? '자르지 않음' : item === 'free' ? '자유 비율' : `${item} · ${CROP_LABELS[item].use}`}</option>)}</select></label>
+        {format === 'gif' ? <>
+          <label>너비<select aria-label="GIF 너비" disabled={busy} value={width} onChange={e => { const v = Number(e.target.value); setWidth(v); savePref('pk.gifWidth', v) }}>
+            {GIF_WIDTHS.map(item => <option key={item} value={item}>{item}px</option>)}</select></label>
+          <label>FPS<select aria-label="GIF FPS" disabled={busy} value={fps} onChange={e => { const v = Number(e.target.value); setFps(v); savePref('pk.gifFps', v) }}>
+            {GIF_FPS.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
+        </> : <>
+          <label>너비<select aria-label="MP4 너비" disabled={busy} value={mp4Options.width} onChange={e => { const v = Number(e.target.value); setMp4Size(v); savePref('pk.mp4Width', v) }}>
+            {sizes.map(item => <option key={item} value={item}>{item ? `${item}px` : '원본 크기'}</option>)}</select></label>
+          <label className="check"><input type="checkbox" aria-label="소리 포함" disabled={busy || !video.hasAudio} checked={audio && video.hasAudio}
+            onChange={e => { setAudio(e.target.checked); savePref('pk.videoAudio', e.target.checked) }} />소리 포함</label>
+        </>}
       </div>
       <dl className="gif-summary">
         <div><dt>길이</dt><dd data-testid="gif-span">{span.toFixed(1)}초</dd></div>
-        <div><dt>프레임</dt><dd>{frames}개</dd></div>
+        {format === 'gif' ? <div><dt>프레임</dt><dd>{frames}개</dd></div> : <div><dt>소리</dt><dd data-testid="video-audio">{mp4Options.audio ? '포함' : '없음'}</dd></div>}
         <div><dt>결과 크기</dt><dd data-testid="gif-size">{outWidth} × {outHeight}</dd></div>
       </dl>
-      {span > 10 && <p className="hint">10초가 넘으면 GIF 용량이 커집니다. 너비나 FPS를 낮춰 보세요.</p>}
-      {!valid && <p role="alert">구간은 0.1~{MAX_GIF_SECONDS}초, 프레임은 600개 이하여야 합니다.</p>}
+      {format === 'gif' && span > 10 && <p className="hint">10초가 넘으면 GIF 용량이 커집니다. 너비나 FPS를 낮춰 보세요.</p>}
+      {video.color !== 'sdr' && <p className="hint">HDR 영상입니다. 색이 바래지 않도록 일반 화면 색(SDR)으로 바꿔 저장합니다.</p>}
+      {!valid && <p role="alert">{format === 'gif' ? `구간은 0.1~${MAX_GIF_SECONDS}초, 프레임은 600개 이하여야 합니다.` : `구간은 0.1초~${formatSeconds(MAX_MP4_SECONDS)}여야 합니다.`}</p>}
       <div className="gif-footer">
       <div className="gif-output">
         <span>출력 폴더</span>
         <span className="folder-name" title={outputFolder ?? undefined}>{outputFolder ?? '미지정 · 저장 시 선택'}</span>
       </div>
       {work === 'create' ? <div className="gif-progress">
-        <progress max={1} value={progress} aria-label="GIF 만드는 중" />
+        <progress max={1} value={progress} aria-label={`${label} 만드는 중`} />
         <button onClick={() => { void api.cancelGif() }}>취소</button>
-      </div> : <button className="primary gif-save" disabled={busy || !valid} onClick={create}>GIF로 저장</button>}
-      <p className="hint">원본 동영상은 바꾸지 않고 <b>원본이름_kkumi.gif</b>로 새로 저장합니다. 원본보다 크게 늘리지 않습니다.</p>
+      </div> : <button className="primary gif-save" disabled={busy || !valid} onClick={create}>{label}로 저장</button>}
+      <p className="hint">원본 동영상은 바꾸지 않고 <b>원본이름_kkumi.{format}</b>로 새로 저장합니다. 원본보다 크게 늘리지 않습니다.</p>
       </div>
     </aside>
   </div>

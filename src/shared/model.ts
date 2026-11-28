@@ -7,6 +7,7 @@ import type { ThumbSaveRequest } from './shapes'
 import type { CropRect } from './crop'
 import type { Turn } from './turn'
 import type { MakerRequest, MakerSaveReceipt } from './sticker-maker'
+import type { CollageSaveRequest } from './collage'
 export type AssetKind = 'photo' | 'sticker'
 export interface ImageAsset {
   id: string
@@ -80,6 +81,8 @@ export interface PhotoApi {
   saveImage(request: SaveRequest): Promise<Result<SaveReceipt | null>>
   /** Saves a 1080×1080 thumbnail as <photo>_thumb.jpg/png in the output folder. */
   saveThumbnail(request: ThumbSaveRequest): Promise<Result<SaveReceipt | null>>
+  /** 사진 합치기: saves the collage as <first photo>_collage.jpg/png in the output folder (null when the folder choice is cancelled). */
+  saveCollage(request: CollageSaveRequest): Promise<Result<SaveReceipt | null>>
   /** Sticker maker: saves each PNG as <name>.png in the output folder (null when the folder choice is cancelled). */
   saveMakerStickers(request: MakerRequest): Promise<Result<MakerSaveReceipt | null>>
   /** Sticker maker: adds the PNGs to the sticker library under `category`. */

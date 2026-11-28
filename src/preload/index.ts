@@ -73,6 +73,7 @@ const api: PhotoApi = {
   updateOutputSettings: output => ipcRenderer.invoke('output:update', output),
   saveImage: (request) => ipcRenderer.invoke('photo:save', request),
   saveThumbnail: request => ipcRenderer.invoke('thumb:save', request),
+  saveCollage: request => ipcRenderer.invoke('collage:save', request),
   saveMakerStickers: request => ipcRenderer.invoke('maker:save', request),
   addMakerStickers: request => ipcRenderer.invoke('maker:library', request)
 }

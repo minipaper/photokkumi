@@ -29,6 +29,7 @@ import { UpdateController } from './updater'
 import { PrefsStore, type WindowBounds } from './prefs'
 import { MAX_BACKUP_BYTES, validAssetId, validMetadata } from '../shared/library'
 import { validMakerRequest, type MakerRequest, type MakerSaveReceipt } from '../shared/sticker-maker'
+import { COLLAGE_JPEG_QUALITY, validCollageSaveRequest, type CollageSaveRequest } from '../shared/collage'
 
 const profile = app.commandLine.getSwitchValue('user-data-dir')
 if (profile) { mkdirSync(resolve(profile), { recursive: true }); app.setPath('userData', resolve(profile)) }
@@ -345,6 +346,41 @@ async function saveThumbnail(request: ThumbSaveRequest): Promise<SaveReceipt | n
   }
 }
 
+/** 사진 합치기: a finished collage named after its first photo (<stem>_collage.jpg|png), saved next to the other results, never overwriting. */
+async function saveCollage(request: CollageSaveRequest): Promise<SaveReceipt | null> {
+  if (!validCollageSaveRequest(request)) throw new Error('유효하지 않은 저장 요청입니다.')
+  const source = photos.get(request.photoId).path
+  if (request.png.byteLength > MAX_OUTPUT_BYTES) throw new Error('저장 이미지가 너무 큽니다.')
+  // PNG signature, at most 16 MP and 8,192 px a side (the limits of every saved image).
+  const info = inspectImage(request.png, 'photo', true)
+  if (info.width !== request.width || info.height !== request.height) throw new Error('합친 사진의 크기가 요청과 다릅니다.')
+  const decoded = nativeImage.createFromBuffer(Buffer.from(request.png))
+  const size = decoded.getSize()
+  if (decoded.isEmpty() || size.width !== request.width || size.height !== request.height) throw new Error('저장 이미지가 손상되었습니다.')
+  if (request.format === 'jpg') {
+    const pixels = decoded.toBitmap()
+    for (let i = 3; i < pixels.length; i += 4) if (pixels[i] !== 255) throw new Error('JPG는 배경색 위에 합성해야 합니다.')
+  }
+  // Re-encode decoded pixels; nothing from the incoming file is copied.
+  const encoded = request.format === 'jpg' ? decoded.toJPEG(COLLAGE_JPEG_QUALITY) : decoded.toPNG()
+  if (!encoded.length || encoded.length > MAX_OUTPUT_BYTES) throw new Error('저장 이미지가 너무 큽니다.')
+  let directory = outputDirectory
+  if (!directory) {
+    const selected = await dialog.showOpenDialog(win!, { title: '결과를 저장할 폴더', properties: ['openDirectory', 'createDirectory'] })
+    if (selected.canceled || !selected.filePaths[0]) return null
+    directory = selected.filePaths[0]
+  }
+  try {
+    const target = await realpath(directory)
+    const name = basename(await saveUnique(target, source, encoded, request.format === 'jpg' ? '.jpg' : '.png', '_collage'))
+    setOutputDirectory(target)
+    return { name, folderLabel: target }
+  } catch (error) {
+    if (error instanceof SaveCleanupError) throw error
+    throw new Error('저장하지 못했습니다. 폴더 권한·여유 공간을 확인하세요. 합친 사진 설정은 유지됩니다.', { cause: error })
+  }
+}
+
 /** Sticker maker PNGs: decoded and re-encoded (nothing from the incoming bytes is copied), then validated like a sticker import. */
 function encodeMakerItems(request: MakerRequest) {
   return request.items.map(item => {
@@ -471,15 +507,16 @@ app.whenReady().then(() => {
     !!win && webContents?.id === win.webContents.id && allowedPermission(permission, origin, pageUrl))
   for (const [channel, action] of [
     ['photo:choose', choosePhotos], ['photo:folder', choosePhotoFolder], ['output:folder', chooseOutputFolder], ['photo:save', save], ['photo:read', (id: string) => photos.read(id)],
-    ['photo:drop', dropFiles], ['photo:remove', removePhoto], ['thumb:save', saveThumbnail]
+    ['photo:drop', dropFiles], ['photo:remove', removePhoto], ['thumb:save', saveThumbnail], ['collage:save', saveCollage]
   ] as const) {
     ipcMain.handle(channel, async (event, ...args: unknown[]): Promise<Result<unknown>> => {
       if (!win || !trustedSender(event.sender.id, win.webContents.id, event.senderFrame === win.webContents.mainFrame, event.senderFrame?.url ?? '', pageUrl)) {
         return { ok: false, error: '허용되지 않은 요청입니다.' }
       }
       if (busy) return { ok: false, error: '현재 작업이 끝난 뒤 다시 시도하세요.' }
-      if (!['photo:save', 'photo:read', 'photo:drop', 'photo:remove', 'thumb:save'].includes(channel) && args.length) return { ok: false, error: '유효하지 않은 요청입니다.' }
+      if (!['photo:save', 'photo:read', 'photo:drop', 'photo:remove', 'thumb:save', 'collage:save'].includes(channel) && args.length) return { ok: false, error: '유효하지 않은 요청입니다.' }
       if (channel === 'thumb:save' && (args.length !== 1 || !validThumbSaveRequest(args[0]))) return { ok: false, error: '유효하지 않은 저장 요청입니다.' }
+      if (channel === 'collage:save' && (args.length !== 1 || !validCollageSaveRequest(args[0]))) return { ok: false, error: '유효하지 않은 저장 요청입니다.' }
       if (channel === 'photo:save' && (args.length !== 1 || !validSaveRequest(args[0]))) return { ok: false, error: '유효하지 않은 저장 요청입니다.' }
       if (channel === 'photo:drop' && (args.length !== 1 || !validDroppedPaths(args[0]))) return { ok: false, error: '끌어 놓은 항목을 확인할 수 없습니다.' }
       if ((channel === 'photo:read' || channel === 'photo:remove') && (args.length !== 1 || !validAssetId(args[0]))) return { ok: false, error: '유효하지 않은 사진 요청입니다.' }

@@ -9,7 +9,7 @@ import { drawShape } from './thumb'
 import type { ShapeItem } from '../shared/shapes'
 import { cropArea, type CropRect } from '../shared/crop'
 /** PNG encoding runs in a worker: main-thread canvas encoding waits for idle time and stalled saves for seconds when the window was behind. */
-function encodePng(bitmap: ImageBitmap): Promise<Uint8Array> {
+export function encodePng(bitmap: ImageBitmap): Promise<Uint8Array> {
   const worker = new Worker(new URL('./encode-worker.ts', import.meta.url), { type: 'module' })
   return new Promise((resolve, reject) => {
     const fail = () => { worker.terminate(); reject(new Error('PNG 인코딩에 실패했습니다.')) }
@@ -18,7 +18,11 @@ function encodePng(bitmap: ImageBitmap): Promise<Uint8Array> {
     worker.postMessage({ bitmap }, [bitmap])
   })
 }
-export async function composePng(photo: ImageBitmap, instances: StickerInstance[], assets: ReadonlyMap<string, { bitmap: ImageBitmap }>, output: OutputSettings = DEFAULT_OUTPUT, regions: BlurRegion[] = [], adjust: Adjustments = NEUTRAL_ADJUSTMENTS, texts: TextItem[] = [], shapes: ShapeItem[] = [], crop?: CropRect): Promise<Uint8Array> {
+export async function composePng(...args: Parameters<typeof composeBitmap>): Promise<Uint8Array> {
+  return encodePng(await composeBitmap(...args))
+}
+/** The saved picture as a bitmap (photo → adjustments → regions → shapes → stickers → texts); the caller closes it. 사진 합치기 draws edited photos with it. */
+export async function composeBitmap(photo: ImageBitmap, instances: StickerInstance[], assets: ReadonlyMap<string, { bitmap: ImageBitmap }>, output: OutputSettings = DEFAULT_OUTPUT, regions: BlurRegion[] = [], adjust: Adjustments = NEUTRAL_ADJUSTMENTS, texts: TextItem[] = [], shapes: ShapeItem[] = [], crop?: CropRect): Promise<ImageBitmap> {
   // Fonts must be ready before drawing, or canvas silently falls back to another face.
   await ensureTextFonts(texts)
   const canvas = new OffscreenCanvas(1, 1)
@@ -72,6 +76,6 @@ export async function composePng(photo: ImageBitmap, instances: StickerInstance[
       drawText(context, text)
       context.restore()
     }
-    return await encodePng(canvas.transferToImageBitmap())
+    return canvas.transferToImageBitmap()
   } finally { canvas.width = 0; canvas.height = 0; releaseCanvas(adjusted) }
 }

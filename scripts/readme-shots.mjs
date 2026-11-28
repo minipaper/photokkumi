@@ -108,6 +108,20 @@ await caption.fill('한강 노을 맛집'); await page.evaluate('document.active
 await page.getByRole('tab', { name: '템플릿' }).click()
 await page.mouse.move(W / 2, H - 60); await page.waitForTimeout(600)
 await shot('thumb.png')
+// Collage: the first four photos as edited (stickers, caption) in a 2×2 grid with rounded corners.
+await page.getByRole('tab', { name: '사진 합치기' }).click()
+await page.getByRole('radio', { name: '4장 2×2' }).click()
+const collageField = async (name, v) => { const f = page.getByRole('spinbutton', { name, exact: true }); await f.fill(String(v)); await f.press('Tab') }
+await collageField('간격', 16); await collageField('모서리 둥글게', 18)
+await page.getByRole('radio', { name: '배경색: 베이지' }).click()
+await page.getByRole('button', { name: '합친 사진 저장' }).waitFor()
+await page.waitForFunction("[...document.querySelectorAll('button')].some(b => b.textContent === '합친 사진 저장' && !b.disabled)")
+await page.getByRole('button', { name: /^칸 1:/ }).click()
+await page.evaluate('document.activeElement?.blur()')
+// The output folder is a temp path here; show only its name.
+await page.evaluate("document.querySelectorAll('.collage-host .folder-name').forEach(node => { node.textContent = '결과' })")
+await page.mouse.move(W / 2, H - 60); await page.waitForTimeout(600)
+await shot('collage.png')
 // GIF from a short synthetic clip (pan over the park picture).
 const clip = join(dir, '산책 영상.mp4')
 spawnSync('ffmpeg', ['-loglevel', 'error', '-loop', '1', '-i', path('산책.png'), '-f', 'lavfi', '-i', 'sine=frequency=330:duration=6', '-vf', "scale=1600:-2,zoompan=z='1.0+0.002*on':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=180:s=1280x720:fps=30", '-t', '6', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', clip])
@@ -134,6 +148,6 @@ await page.getByRole('radio', { name: 'MP4 · 동영상' }).click(); await page.
 await page.waitForTimeout(800)
 await shot('gif.png')
 await app.evaluate(({ app }) => app.exit(0)).catch(() => {})
-for (const name of ['edit', 'blur', 'text', 'crop', 'thumb', 'maker', 'gif']) spawnSync('sips', ['-Z', '1600', join(OUT, name + '.png'), '--out', resolve(ROOT, 'docs/images', name + '.png')])
+for (const name of ['edit', 'blur', 'text', 'crop', 'thumb', 'collage', 'maker', 'gif']) spawnSync('sips', ['-Z', '1600', join(OUT, name + '.png'), '--out', resolve(ROOT, 'docs/images', name + '.png')])
 process.stdout.write('done\n')
 process.exit(0)
